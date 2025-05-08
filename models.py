@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import List
 
 
 @dataclass
@@ -17,6 +18,7 @@ class BuildingEvent:
     y: int
     isFinished: bool  # False when building starts construction, True when completed
     buildingTag: int
+    isDestroyed: bool
 
 
 @dataclass
@@ -52,3 +54,20 @@ class MacroStatistics:
     vespeneKilledArmy: int
     vespeneKilledEconomy: int
     vespeneKilledTechnology: int
+
+
+@dataclass
+class UnitPosition:
+    gameloop: int
+    x: int
+    y: int
+
+
+@dataclass
+class UnitLifetime:
+    tag: int
+    player: int
+    name: str
+    positions: List[UnitPosition]
+    dead: bool
+    killer: int  # -1 if not dead, -2 if killer is unknown

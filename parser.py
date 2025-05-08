@@ -261,7 +261,7 @@ class Parser:
                         else -2
                     )
                 else:
-                    killerTag = units[killerIndex]
+                    killerTag = units[killerIndex].tag
 
                 x = event["m_x"]
                 y = event["m_y"]
@@ -299,4 +299,5 @@ parser = Parser("tests/replays/AbyssalReefLE.SC2Replay")
 
 events = parser.get_unit_lifetimes()
 
-pass
+for event in events:
+    print(event)

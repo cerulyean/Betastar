@@ -1,7 +1,7 @@
 from mpyq import MPQArchive
 from s2protocol import versions
 from models import BuildingEvent, Message, MacroStatistics, UnitLifetime, UnitPosition
-from utils import unit_tag, unit_tag_index
+from utils import unit_tag
 from typing import List
 from collections import defaultdict
 
@@ -289,15 +289,11 @@ class Parser:
                     x = items[i + 1]
                     y = items[i + 2]
                     pos = UnitPosition(gameloop, x, y)
+                    # TODO: Planetary Fortress can be included in SUnitPositionsEvents due to their
+                    # ability to do damage. Excluding them for now, need better way to handle this.
+                    if tagIndex not in units:
+                        continue
                     units[tagIndex].positions.append(pos)
-        
+
         deadUnits.extend(list(units.values()))
         return deadUnits
-
-
-parser = Parser("tests/replays/AbyssalReefLE.SC2Replay")
-
-events = parser.get_unit_lifetimes()
-
-for event in events:
-    print(event)

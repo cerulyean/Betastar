@@ -64,7 +64,9 @@ class TestParser(unittest.TestCase):
         for name, parser in self._foreach():
             with self.subTest(replay=name):
                 lifetimes = parser.get_unit_lifetimes()
-                self.assertTrue(all(isinstance(u, UnitLifetime) for u in lifetimes))
+                self.assertTrue(
+                    all(isinstance(u, UnitLifetime) for u in lifetimes)
+                )
                 self.assertTrue(all(len(u.positions) > 0 for u in lifetimes))
                 self.assertTrue(any(u.dead for u in lifetimes))
                 self.assertTrue(any(not u.dead for u in lifetimes))

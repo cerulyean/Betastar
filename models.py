@@ -17,7 +17,7 @@ class BuildingEvent:
     x: int
     y: int
     isFinished: bool  # False when building starts construction, True when completed
-    buildingTag: int
+    buildingTag: int  # Globally unique building tag
     isDestroyed: bool
 
 
@@ -65,7 +65,7 @@ class UnitPosition:
 
 @dataclass
 class UnitLifetime:
-    tag: int
+    tag: int  # Globally unique unit tag
     player: int
     name: str
     positions: List[UnitPosition]

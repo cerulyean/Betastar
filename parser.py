@@ -1,6 +1,12 @@
 from mpyq import MPQArchive
 from s2protocol import versions
-from models import BuildingEvent, Message, MacroStatistics, UnitLifetime, UnitPosition
+from models import (
+    BuildingEvent,
+    Message,
+    MacroStatistics,
+    UnitLifetime,
+    UnitPosition,
+)
 from utils import unit_tag
 from typing import List
 from collections import defaultdict
@@ -20,7 +26,14 @@ UnitInitExclusionList = set(
 
 
 class Parser:
+    """
+    Parser that handles parsing of tracker events for replays
+    """
+
     def __init__(self, path: str) -> None:
+        """
+        :param path: relative or absolute path of the target replay
+        """
         self.archive = MPQArchive(path)
 
         # Get replay version number and build protocol decoder for this version
@@ -220,6 +233,11 @@ class Parser:
         return macroStats
 
     def get_unit_lifetimes(self) -> List[UnitLifetime]:
+        """
+        Returns a list of UnitLifetimes that describe all past positions of all units.
+        Note that this only provides position data in gameloops where the unit participates
+        in combat, to get more detailed data, use the simulator.
+        """
         units = dict()  # Only stores units that are alive
         pastIndexHolders = defaultdict(lambda: [])
         deadUnits = []

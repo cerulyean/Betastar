@@ -41,9 +41,6 @@ class ReplaySimulator:
             home_replay_folder = Path.home() / "Documents" / "StarCraft II" / "Replays"
             replay_path = home_replay_folder / replay_name
             if not replay_path.is_file():
-                logger.warning(
-                    f"You are on linux, please put the replay in directory {home_replay_folder}"
-                )
                 raise FileNotFoundError
             replay_path = str(replay_path)
         elif os.path.isabs(replay_name):

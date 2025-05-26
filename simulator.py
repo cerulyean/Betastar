@@ -11,6 +11,11 @@ from models import UnitLifetime, UnitPosition
 
 
 class _ObservationAggregator(ObserverAI):
+    """
+    Internal Class that abstracts away the Observer interface,
+    use `ReplaySimulator` directly to interact and extract data
+    from replays
+    """
 
     def __init__(self, step_size: int):
         self.lifetimes = dict()
@@ -35,7 +40,26 @@ class _ObservationAggregator(ObserverAI):
 
 
 class ReplaySimulator:
+    """
+    Each `ReplaySimulator` is bound to exactly one replay path, and `run_simulation()` must be called
+    before any additional data can be extracted from an instance of `ReplaySimulator`
+
+    Example Usage::
+
+        path = "tests/replays/Ultralove.SC2Replay"
+        simulator = ReplaySimulator(path, step_size=60)
+        simulator.run_simulation()
+        lifetimes = simulator.get_unit_lifetimes()
+        print(lifetimes)
+    """
+
     def __init__(self, path: str, step_size: int):
+        replay_path = self._validate_path(path)
+        self.replay_path = replay_path
+        self.observer = _ObservationAggregator(step_size)
+        self.completed_simulation = False
+
+    def _validate_path(self, path: str) -> str:
         replay_name = path
         if platform.system() == "Linux":
             home_replay_folder = Path.home() / "Documents" / "StarCraft II" / "Replays"
@@ -50,18 +74,27 @@ class ReplaySimulator:
             folder_path = os.path.dirname(__file__)
             replay_path = os.path.join(folder_path, replay_name)
         assert os.path.isfile(replay_path), f"Replay not found: {replay_path}"
+        return replay_path
 
-        self.replay_path = replay_path
-        self.observer = _ObservationAggregator(step_size)
-
-    def run_simulation(self) -> List[UnitLifetime]:
+    def run_simulation(self) -> None:
+        """
+        This function must be called before any other getter functions can be used
+        """
         run_replay(
             self.observer, replay_path=self.replay_path, realtime=False, observed_id=1
         )
+        self.completed_simulation = True
+
+    def get_unit_lifetimes(self) -> List[UnitLifetime]:
+        assert (
+            self.completed_simulation
+        ), "Call simulator.run_simulation() before using this function!"
         return self.observer.lifetimes
 
 
-path = "tests/replays/Ultralove.SC2Replay"
-simulator = ReplaySimulator(path, step_size=60)
-lifetimes = simulator.run_simulation()
-print(lifetimes)
+# Example use of the ReplaySimulator
+# path = "tests/replays/Ultralove.SC2Replay"
+# simulator = ReplaySimulator(path, step_size=60)
+# simulator.run_simulation()
+# lifetimes = simulator.get_unit_lifetimes()
+# print(lifetimes)

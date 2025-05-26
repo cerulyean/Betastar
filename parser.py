@@ -27,7 +27,21 @@ UnitInitExclusionList = set(
 
 class Parser:
     """
-    Parser that handles parsing of tracker events for replays
+    Parser that handles parsing of tracker events for replays.
+    Basic information is provided by this parser, to get more
+    detailed per-tick game state data, use the `ReplaySimulator`,
+    though the simulator uses significantly more resources than the Parser
+    and runs a lot slower.
+
+    Example Usage::
+
+        parser = Parser("tests/replays/Ultralove.SC2Replay")
+        messages = parser.get_messages()
+        building_events = parser.get_building_events()
+        macro_stats = parser.get_macro_statistics()
+        lifetimes = parser.get_unit_lifetimes()
+        print(building_events)
+
     """
 
     def __init__(self, path: str) -> None:
@@ -315,3 +329,12 @@ class Parser:
 
         deadUnits.extend(list(units.values()))
         return deadUnits
+
+
+# Example Usage
+# parser = Parser("tests/replays/Ultralove.SC2Replay")
+# messages = parser.get_messages()
+# building_events = parser.get_building_events()
+# macro_stats = parser.get_macro_statistics()
+# lifetimes = parser.get_unit_lifetimes()
+# print(building_events)

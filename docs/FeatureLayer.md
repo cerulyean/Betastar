@@ -1,0 +1,1 @@
+Within each `ObservationResponse` sent out by the SC2 engine, an optional flag can be toggled, which enables the feature layer, and this data is sent out in every response.

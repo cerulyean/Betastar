@@ -18,8 +18,9 @@ class _ObservationAggregator(ObserverAI):
     """
 
     def __init__(self, step_size: int):
-        self.lifetimes = dict()
         self.step_size = step_size
+        self.lifetimes = dict()
+        self.visibility = []
 
     async def on_start(self):
         # Game engine advances step_size gameloops before sending observation
@@ -28,6 +29,8 @@ class _ObservationAggregator(ObserverAI):
     async def on_step(self, iteration: int):
         # TODO: Only basic information is included for now, need to add more
         # stuff to aggregate later on
+
+        # Add Unit lifetime data
         for i in range(len(self.units)):
             unit = self.units[i]
             position = UnitPosition(unit.game_loop, unit.position[0], unit.position[1])
@@ -38,6 +41,9 @@ class _ObservationAggregator(ObserverAI):
             else:
                 self.lifetimes[unit.tag].positions.append(position)
 
+        # Add player visibility data
+        self.visibility.append(self.state.visibility.data_numpy)
+
 
 class ReplaySimulator:
     """
@@ -47,17 +53,26 @@ class ReplaySimulator:
     Example Usage::
 
         path = "tests/replays/Ultralove.SC2Replay"
-        simulator = ReplaySimulator(path, step_size=60)
+        simulator = ReplaySimulator(path, step_size=60, fow_pov=2)
         simulator.run_simulation()
         lifetimes = simulator.get_unit_lifetimes()
         print(lifetimes)
     """
 
-    def __init__(self, path: str, step_size: int):
+    def __init__(self, path: str, step_size: int = 22, fow_pov: int = 0):
+        """
+        :param path: Relative or absolute path of replay
+        :param step_size: Number of gameloops to skip before collecting observation data.
+            Increase step size if performance is too slow.
+            For reference, 22.4 gameloops happen every second
+        :param fow_pov: Perspective from which fog of war should be observed from. Set this
+            to 0 to disable fog of war, 1 to spectate from Player 1's POV, and 2 for Player 2's POV
+        """
         replay_path = self._validate_path(path)
         self.replay_path = replay_path
         self.observer = _ObservationAggregator(step_size)
         self.completed_simulation = False
+        self.fow_pov = fow_pov
 
     def _validate_path(self, path: str) -> str:
         replay_name = path
@@ -81,7 +96,10 @@ class ReplaySimulator:
         This function must be called before any other getter functions can be used
         """
         run_replay(
-            self.observer, replay_path=self.replay_path, realtime=False, observed_id=1
+            self.observer,
+            replay_path=self.replay_path,
+            realtime=False,
+            observed_id=self.fow_pov,
         )
         self.completed_simulation = True
 
@@ -91,10 +109,18 @@ class ReplaySimulator:
         ), "Call simulator.run_simulation() before using this function!"
         return self.observer.lifetimes
 
+    def get_visibility_map(self):
+        assert (
+            self.completed_simulation
+        ), "Call simulator.run_simulation() before using this function!"
+        return self.observer.visibility
+
 
 # Example use of the ReplaySimulator
-# path = "tests/replays/Ultralove.SC2Replay"
-# simulator = ReplaySimulator(path, step_size=60)
-# simulator.run_simulation()
+path = "tests/replays/Ultralove.SC2Replay"
+simulator = ReplaySimulator(path, step_size=60, fow_pov=2)
+simulator.run_simulation()
 # lifetimes = simulator.get_unit_lifetimes()
 # print(lifetimes)
+visibility = simulator.get_visibility_map()
+print(visibility)

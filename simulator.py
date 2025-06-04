@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List
 
 import sc2.units
+from sc2.ids.unit_typeid import UnitTypeId
 from sc2.main import run_replay
 from sc2.observer_ai import ObserverAI
 
@@ -26,19 +27,39 @@ class _ObservationAggregator(ObserverAI):
     from replays
     """
 
-    def __init__(self, step_size: int, player_pow = 0):
+    def __init__(self, step_size: int, player_pov = 0):
+        self.prev_player_buildings = {}
         self.step_size = step_size
         self.lifetimes = dict()
         self.visibility = []
         self.number_of_units = dict()
         self.follow_unit = None
         self.enemy_units_seen_and_alive = {}
-        self.player_pov = player_pow
+        self.player_pov = player_pov
         self.player_actions = {}
         self.buildings_constructed = {0: [], 1: [], 2: []}
         self.new_buildings = []
+        self.player_buildings = {}
+        self.player_army = {}
 
-    def _other(self, x: int) -> int:
+    async def on_unit_type_changed(self, unit: Unit, previous_type: UnitTypeId) -> None:
+        """Override this in your bot class. This function is called when a unit type has changed. To get the current UnitTypeId of the unit, use 'unit.type_id'
+
+        This may happen when a larva morphed to an egg, siege tank sieged, a zerg unit burrowed, a hatchery morphed to lair,
+        a corruptor morphed to broodlordcocoon, etc..
+#player structures total, player structures recently construted/morphed
+        Examples::
+
+            print(f"My unit changed type: {unit} from {previous_type} to {unit.type_id}")
+
+        :param unit:
+        :param previous_type:
+        """
+        raise Exception
+
+    def _other(self, x:int = -1) -> int:
+        if x == -1:
+            return self._other(self.player_pov)
         if x == 1:
             return 2
         if x == 2:
@@ -55,6 +76,23 @@ class _ObservationAggregator(ObserverAI):
         :param unit:"""
         if unit.is_structure and unit.owner_id == self.player_pov:
             self.new_buildings.append(unit)
+
+    async def on_unit_destroyed(self, unit_tag):
+        """
+        Override this in your bot class.
+        Note that this function uses unit tags and not the unit objects
+        because the unit does not exist anymore.
+
+        :param unit_tag:
+        """
+        if self.enemy_units_seen_and_alive.get(unit_tag) is not None:
+            del self.enemy_units_seen_and_alive[unit_tag]
+
+        if self.player_army.get(unit_tag) is not None:
+            del self.player_army[unit_tag]
+
+        if self.player_buildings.get(unit_tag) is not None:
+            del self.player_buildings[unit_tag]
 
     async def on_step(self, iteration: int):
         # TODO: Only basic information is included for now, need to add more
@@ -77,11 +115,11 @@ class _ObservationAggregator(ObserverAI):
         # Counts unit number
         self.number_of_units[iteration] = self.all_units.amount
 
-
+        self.prev_player_buildings = self.player_buildings.copy()
 
         player_units = []
         for unit in self.units:
-            if unit.owner_id == self._other(self.player_pov) and unit.is_visible:
+            if unit.owner_id == self._other() and unit.is_visible:
                 player_units.append(unit)
                 self.enemy_units_seen_and_alive[unit.tag] = {"unit": unit,
                                                              "last_seen_position": unit.position,
@@ -113,19 +151,25 @@ class _ObservationAggregator(ObserverAI):
                                                              "energy": unit.energy,
                                                              "energy_max": unit.energy_max,
                                                              }
+            if unit.owner_id == self.player_pov and not unit.is_structure:
+                self.player_army[unit.tag] = unit
 
+            if unit.owner_id == self.player_pov and unit.is_structure:
+                self.player_buildings[unit.tag] = unit
 
-        #print(self.enemy_units_seen_and_alive)
+        print(self.player_buildings)
+        print([unit_info["unit"] for unit_info in self.enemy_units_seen_and_alive.values()])
+
         print(iteration)
         #print(player_units)
+
+        for building in self.player_buildings:
+            if self.prev_player_buildings[building.tag].name != building.name:
+                self.new_buildings.append(building)
         self.buildings_constructed[2] = self.buildings_constructed[1].copy()
         self.buildings_constructed[1] = self.buildings_constructed[0].copy()
         self.buildings_constructed[0] = self.new_buildings
-        print("new buildings:")
-        print(self.new_buildings)
         self.new_buildings = []
-
-
 
 
 class ReplaySimulator:
@@ -206,7 +250,7 @@ class ReplaySimulator:
 
 
 # Example use of the ReplaySimulator
-path = "tests/replays/2025-06-03 - (Z)ISay VS (T)kai.SC2Replay"
+path = "tests/replays/Alcyone LE (2).SC2Replay"
 simulator = ReplaySimulator(path, fow_pov=1)
 #, step_size=60
 simulator.run_simulation()

@@ -264,23 +264,41 @@ class ObserverAI(BotAIInternal):
             await self.on_upgrade_complete(upgrade_completed)
         self._previous_upgrades = self.state.upgrades
 
-    async def _issue_building_events(self):
-        for structure in self.structures:
-            # Check build_progress < 1 to exclude starting townhall
-            if structure.tag not in self._structures_previous_map and structure.build_progress < 1:
-                await self.on_building_construction_started(structure)
-                continue
-            # From here on, only check completed structure, so we ignore structures with build_progress < 1
-            if structure.build_progress < 1:
-                continue
-            # Using get function in case somehow the previous structure map (from last frame) does not contain this structure
-            structure_prev = self._structures_previous_map.get(structure.tag, None)
-            if structure_prev and structure_prev.build_progress < 1:
-                await self.on_building_construction_complete(structure)
+    # async def _issue_building_events(self):
+    #     for structure in self.structures:
+    #         # Check build_progress < 1 to exclude starting townhall
+    #         if structure.tag not in self._structures_previous_map and structure.build_progress < 1:
+    #             await self.on_building_construction_started(structure)
+    #             continue
+    #         # From here on, only check completed structure, so we ignore structures with build_progress < 1
+    #         if structure.build_progress < 1:
+    #             continue
+    #         # Using get function in case somehow the previous structure map (from last frame) does not contain this structure
+    #         structure_prev = self._structures_previous_map.get(structure.tag, None)
+    #         if structure_prev and structure_prev.build_progress < 1:
+    #             await self.on_building_construction_complete(structure)
 
     async def _issue_unit_dead_events(self):
         for unit_tag in self.state.dead_units:
             await self.on_unit_destroyed(unit_tag)
+
+    # async def _issue_vision_events(self) -> None:
+    #     # Call events for enemy unit entered vision
+    #     for enemy_unit in self.enemy_units:
+    #         if enemy_unit.tag not in self._enemy_units_previous_map:
+    #             await self.on_enemy_unit_entered_vision(enemy_unit)
+    #     for enemy_structure in self.enemy_structures:
+    #         if enemy_structure.tag not in self._enemy_structures_previous_map:
+    #             await self.on_enemy_unit_entered_vision(enemy_structure)
+    #
+    #     # Call events for enemy unit left vision
+    #     enemy_units_left_vision: set[int] = set(self._enemy_units_previous_map) - self.enemy_units.tags
+    #     print("Hello")
+    #     for enemy_unit_tag in enemy_units_left_vision:
+    #         await self.on_enemy_unit_left_vision(enemy_unit_tag)
+    #     enemy_structures_left_vision: set[int] = set(self._enemy_structures_previous_map) - self.enemy_structures.tags
+    #     for enemy_structure_tag in enemy_structures_left_vision:
+    #         await self.on_enemy_unit_left_vision(enemy_structure_tag)
 
     async def on_unit_destroyed(self, unit_tag):
         """

@@ -18,6 +18,8 @@ MAX_GRID_SIZE = 182
 NUMBER_OF_GRIDS = 20
 SIZE_OF_GRID = MAX_GRID_SIZE/NUMBER_OF_GRIDS
 NUM_PREDICTED_STEPS = 2
+WORKERS = ["Drone", "SCV", "Probe"]
+NOT_ARMY = WORKERS + ["Overlord", "Dropperlord", "Overseer"]
 
 
 
@@ -44,7 +46,7 @@ class _ObservationAggregator(ObserverAI):
         self.player_army = {}
         self.new_units = []
         self.units_built = {0: [], 1: [], 2: []}
-        self.drones_built = 0
+        self.workers_built = 0
         self.army_built = 0
         self.prev_player_units = {}
 
@@ -127,6 +129,8 @@ class _ObservationAggregator(ObserverAI):
 
         self.new_buildings = []
         self.new_units = []
+        self.workers_built = 0
+        self.army_built = 0
 
         # Add Unit lifetime data
         for i in range(len(self.units)):
@@ -186,6 +190,14 @@ class _ObservationAggregator(ObserverAI):
             if unit.owner_id == self.player_pov and not unit.is_structure:
                 if unit.tag not in self.player_army:
                     self.new_units.append(unit)
+                    #TODO scv and probe name might be incorrect just fix it
+                    if unit.name in WORKERS:
+                        self.workers_built += 1
+                    #TODO i think update this to use supply instead. But i cant find where they keep supply cost for
+                    # unit
+                    if unit.name not in NOT_ARMY:
+                        self.army_built += 1
+
                 self.player_army[unit.tag] = unit
 
             #tracking total structures + new structures

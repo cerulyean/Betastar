@@ -41,6 +41,11 @@ class _ObservationAggregator(ObserverAI):
         self.new_buildings = []
         self.player_buildings = {}
         self.player_army = {}
+        self.new_units = []
+        self.units_built = {0: [], 1: [], 2: []}
+        self.drones_built = 0
+        self.army_built = 0
+        self.prev_player_units = {}
 
     async def on_unit_type_changed(self, unit: Unit, previous_type: UnitTypeId) -> None:
         """Override this in your bot class. This function is called when a unit type has changed. To get the current UnitTypeId of the unit, use 'unit.type_id'
@@ -76,6 +81,8 @@ class _ObservationAggregator(ObserverAI):
         :param unit:"""
         if unit.is_structure and unit.owner_id == self.player_pov:
             self.new_buildings.append(unit)
+        if not unit.is_structure and unit.owner_id == self.player_pov:
+            self.new_units.append(unit)
 
     async def on_unit_destroyed(self, unit_tag):
         """
@@ -98,6 +105,9 @@ class _ObservationAggregator(ObserverAI):
         # TODO: Only basic information is included for now, need to add more
         # stuff to aggregate later on
 
+        self.new_buildings = []
+        self.new_units = []
+
         # Add Unit lifetime data
         for i in range(len(self.units)):
             unit = self.units[i]
@@ -111,16 +121,18 @@ class _ObservationAggregator(ObserverAI):
 
         # Add player visibility data
         self.visibility.append(self.state.visibility.data_numpy)
+        print(self.visibility)
 
         # Counts unit number
         self.number_of_units[iteration] = self.all_units.amount
 
         self.prev_player_buildings = self.player_buildings.copy()
 
-        player_units = []
+        self.prev_player_units = self.player_army.copy()
+
+        #Tracking what enemy units detected
         for unit in self.units:
             if unit.owner_id == self._other() and unit.is_visible:
-                player_units.append(unit)
                 self.enemy_units_seen_and_alive[unit.tag] = {"unit": unit,
                                                              "last_seen_position": unit.position,
                                                              "unit_type": unit.type_id,
@@ -151,25 +163,39 @@ class _ObservationAggregator(ObserverAI):
                                                              "energy": unit.energy,
                                                              "energy_max": unit.energy_max,
                                                              }
+            #Tracking what new units are made + adding to army
             if unit.owner_id == self.player_pov and not unit.is_structure:
+                if unit.tag not in self.player_army:
+                    self.new_units.append(unit)
                 self.player_army[unit.tag] = unit
 
+            #tracking total structures
             if unit.owner_id == self.player_pov and unit.is_structure:
                 self.player_buildings[unit.tag] = unit
 
-        print(self.player_buildings)
-        print([unit_info["unit"] for unit_info in self.enemy_units_seen_and_alive.values()])
 
+
+        # print(self.player_buildings)
+        # print([unit_info["unit"] for unit_info in self.enemy_units_seen_and_alive.values()])
+        #
         print(iteration)
-        #print(player_units)
 
-        for building in self.player_buildings:
-            if self.prev_player_buildings[building.tag].name != building.name:
+        #Tracking unit morphs
+        for tag in self.player_army:
+            unit = self.player_army[tag]
+            if tag in self.prev_player_units and self.prev_player_units[tag].name != unit.name:
+                self.new_units.append(unit)
+
+        #tracking building morphs
+        for tag in self.player_buildings:
+            building = self.player_buildings[tag]
+            if tag in self.prev_player_buildings and self.prev_player_buildings[tag].name != building.name:
                 self.new_buildings.append(building)
+
         self.buildings_constructed[2] = self.buildings_constructed[1].copy()
         self.buildings_constructed[1] = self.buildings_constructed[0].copy()
         self.buildings_constructed[0] = self.new_buildings
-        self.new_buildings = []
+        print(self.new_units)
 
 
 class ReplaySimulator:

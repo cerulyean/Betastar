@@ -3,9 +3,10 @@ import sys
 import platform
 from contextlib import nullcontext
 from pathlib import Path
-from typing import List
+from typing import List, Dict
 
 import sc2.units
+from sc2.game_state import GameState
 from sc2.ids.unit_typeid import UnitTypeId
 from sc2.main import run_replay
 from sc2.observer_ai import ObserverAI
@@ -101,6 +102,25 @@ class _ObservationAggregator(ObserverAI):
         if self.player_buildings.get(unit_tag) is not None:
             del self.player_buildings[unit_tag]
 
+    #testing to see if overriding breaks anything
+    #ok it doesnt. observer ai overrides this supposedly final method with some other garbage that broke support for
+    #supply_army and supply_workers. I put them back so i can use them for tracking total worker count and total
+    #army count
+    def _prepare_step(self, state, proto_game_info):
+        """
+        :param state:
+        :param proto_game_info:
+        """
+        # Set attributes from new state before on_step."""
+        self.state: GameState = state  # See game_state.py
+        # Required for events, needs to be before self.units are initialized so the old units are stored
+        self._units_previous_map: Dict = {unit.tag: unit for unit in self.units}
+        self._structures_previous_map: Dict = {structure.tag: structure for structure in self.structures}
+        self.supply_army: int = state.common.food_army
+        self.supply_workers: int = state.common.food_workers
+
+        self._prepare_units()
+
     async def on_step(self, iteration: int):
         # TODO: Only basic information is included for now, need to add more
         # stuff to aggregate later on
@@ -121,7 +141,6 @@ class _ObservationAggregator(ObserverAI):
 
         # Add player visibility data
         self.visibility.append(self.state.visibility.data_numpy)
-        print(self.visibility)
 
         # Counts unit number
         self.number_of_units[iteration] = self.all_units.amount
@@ -169,16 +188,14 @@ class _ObservationAggregator(ObserverAI):
                     self.new_units.append(unit)
                 self.player_army[unit.tag] = unit
 
-            #tracking total structures
+            #tracking total structures + new structures
             if unit.owner_id == self.player_pov and unit.is_structure:
+                if unit.tag not in self.player_buildings:
+                    self.new_buildings.append(unit)
                 self.player_buildings[unit.tag] = unit
 
 
 
-        # print(self.player_buildings)
-        # print([unit_info["unit"] for unit_info in self.enemy_units_seen_and_alive.values()])
-        #
-        print(iteration)
 
         #Tracking unit morphs
         for tag in self.player_army:
@@ -192,10 +209,17 @@ class _ObservationAggregator(ObserverAI):
             if tag in self.prev_player_buildings and self.prev_player_buildings[tag].name != building.name:
                 self.new_buildings.append(building)
 
+
         self.buildings_constructed[2] = self.buildings_constructed[1].copy()
         self.buildings_constructed[1] = self.buildings_constructed[0].copy()
         self.buildings_constructed[0] = self.new_buildings
+        print("iteration")
+        print(iteration)
+        print("army + workers + new_units + buildings")
+        print(self.supply_army)
+        print(self.supply_workers)
         print(self.new_units)
+        print(self.new_buildings)
 
 
 class ReplaySimulator:

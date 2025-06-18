@@ -51,9 +51,12 @@ class ObserverAI(BotAIInternal):
         self.reactor_tags: Set[int] = set()
         self.minerals: int = None
         self.vespene: int = None
-        self.supply_army: Union[float, int] = None
+        #This was what the guy did, modifying to see if it does anything
+        #self.supply_army: Union[float, int] = None
         # Doesn't include workers in production
-        self.supply_workers: Union[float, int] = None
+        #self.supply_workers: Union[float, int] = None
+        self.supply_army: float = 0
+        self.supply_workers: float = 12
         self.supply_cap: Union[float, int] = None
         self.supply_used: Union[float, int] = None
         self.supply_left: Union[float, int] = None

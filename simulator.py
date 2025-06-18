@@ -120,6 +120,8 @@ class _ObservationAggregator(ObserverAI):
         self._structures_previous_map: Dict = {structure.tag: structure for structure in self.structures}
         self.supply_army: int = state.common.food_army
         self.supply_workers: int = state.common.food_workers
+        self.minerals: int = state.common.minerals
+        self.vespene: int = state.common.vespene
 
         self._prepare_units()
 
@@ -227,11 +229,12 @@ class _ObservationAggregator(ObserverAI):
         self.buildings_constructed[0] = self.new_buildings
         print("iteration")
         print(iteration)
-        print("army + workers + new_units + buildings")
+        print("army + workers + new_units + buildings + mins")
         print(self.supply_army)
         print(self.supply_workers)
         print(self.new_units)
         print(self.new_buildings)
+        print(self.minerals)
 
 
 class ReplaySimulator:

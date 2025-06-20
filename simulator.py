@@ -74,6 +74,12 @@ class _ObservationAggregator(ObserverAI):
         self.workers_built = 0
         self.army_built = 0
         self.prev_player_units = {}
+        #These are supply things already done
+        # self.supply_cap
+        # self.supply_left
+        # self.supply_used
+        # self.supply_army
+        # self.supply_army
 
     def _other(self, x:int = -1) -> int:
         if x == -1:
@@ -132,6 +138,11 @@ class _ObservationAggregator(ObserverAI):
         self.supply_workers: int = state.common.food_workers
         self.minerals: int = state.common.minerals
         self.vespene: int = state.common.vespene
+        self.supply_army: int = state.common.food_army
+        self.supply_workers: int = state.common.food_workers  # Doesn't include workers in production
+        self.supply_cap: int = state.common.food_cap
+        self.supply_used: int = state.common.food_used
+        self.supply_left: int = self.supply_cap - self.supply_used
         self._prepare_units()
 
     #todo include supply cap + current max supply
@@ -174,7 +185,6 @@ class _ObservationAggregator(ObserverAI):
             if unit.owner_id == self.player_pov and not unit.is_structure:
                 if unit.tag not in self.player_army:
                     self.new_units.append(unit)
-                    #TODO scv and probe name might be incorrect just fix it
                     if unit.type_id in WORKERS:
                         self.workers_built += 1
                     #TODO i think update this to use supply instead. But i cant find where they keep supply cost for
@@ -222,6 +232,16 @@ class _ObservationAggregator(ObserverAI):
         print(self.new_buildings)
         print(self.minerals)
         print(self.player_army)
+        print(self.supply_cap)
+        print(self.supply_left)
+        print(self.supply_used)
+        print(self.supply_army)
+        print(self.supply_workers)
+        # self.supply_cap
+        # self.supply_left
+        # self.supply_used
+        # self.supply_army
+        # self.supply_workers
 
 
 class ReplaySimulator:

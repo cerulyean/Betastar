@@ -1,7 +1,11 @@
+import json
 import os
 import platform
 from pathlib import Path
 from typing import List, Dict
+
+import numpy
+import numpy as np
 
 from sc2.game_state import GameState
 from sc2.ids.unit_typeid import UnitTypeId
@@ -11,6 +15,8 @@ from sc2.observer_ai import ObserverAI
 from models import UnitLifetime, UnitPosition
 from sc2.unit import Unit
 
+import gzip
+
 MAX_GRID_SIZE = 182
 NUMBER_OF_GRIDS = 20
 SIZE_OF_GRID = MAX_GRID_SIZE/NUMBER_OF_GRIDS
@@ -19,7 +25,7 @@ WORKERS = [UnitTypeId.SCV, UnitTypeId.PROBE, UnitTypeId.DRONE]
 NOT_ARMY = WORKERS + [UnitTypeId.OVERLORD, UnitTypeId.OVERSEER, UnitTypeId.OVERLORDTRANSPORT]
 
 def extract_unit_details(unit: Unit):
-    return {"unit": unit,
+     return {"tag": unit.tag,
             "UNITTYPEID": unit.type_id,
              "last_seen_position": unit.position,
              "unit_type": unit.type_id,
@@ -61,7 +67,7 @@ class _ObservationAggregator(ObserverAI):
         self.prev_player_buildings = {}
         self.step_size = step_size
         self.lifetimes = dict()
-        self.visibility = []
+        self.visibility = numpy.ndarray
         self.number_of_units = dict()
         self.enemy_units_seen_and_alive = {}
         self.player_pov = player_pov
@@ -80,6 +86,8 @@ class _ObservationAggregator(ObserverAI):
         # self.supply_used
         # self.supply_army
         # self.supply_army
+        self.data = {}
+        self.units2 = {}
 
     def _other(self, x:int = -1) -> int:
         if x == -1:
@@ -166,7 +174,9 @@ class _ObservationAggregator(ObserverAI):
                 self.lifetimes[unit.tag].positions.append(position)
 
         # Add player visibility data
-        self.visibility.append(self.state.visibility.data_numpy)
+        self.visibility = self.state.visibility.data_numpy
+
+        print(type(self.state.visibility.data_numpy))
 
         # Counts unit number
         self.number_of_units[iteration] = self.all_units.amount
@@ -181,10 +191,12 @@ class _ObservationAggregator(ObserverAI):
                 details = extract_unit_details(unit)
                 details["last_seen"] = iteration
                 self.enemy_units_seen_and_alive[unit.tag] = details
+                self.units2[unit.tag] = unit
             #Tracking what new units are made + adding to army
             if unit.owner_id == self.player_pov and not unit.is_structure:
                 if unit.tag not in self.player_army:
                     self.new_units.append(unit)
+                    self.units2[unit.tag] = unit
                     if unit.type_id in WORKERS:
                         self.workers_built += 1
                     #TODO i think update this to use supply instead. But i cant find where they keep supply cost for
@@ -195,25 +207,30 @@ class _ObservationAggregator(ObserverAI):
 
                 details = extract_unit_details(unit)
                 self.player_army[unit.tag] = details
+                self.units2[unit.tag] = unit
 
             #tracking total structures + new structures
             if unit.owner_id == self.player_pov and unit.is_structure:
                 if unit.tag not in self.player_buildings:
                     self.new_buildings.append(unit)
+                    self.units2[unit.tag] = unit
                 self.player_buildings[unit.tag] = unit
+                self.units2[unit.tag] = unit
 
 
         #Tracking unit morphs
         for tag in self.player_army:
-            unit = self.player_army[tag]["unit"]
-            if tag in self.prev_player_units and self.prev_player_units[tag]["unit"].name != unit.name:
+            unit = self.units2[tag]
+            if tag in self.prev_player_units and self.prev_player_units[tag]["UNITTYPEID"] != unit.type_id:
                 self.new_units.append(unit)
+                self.units2[unit.tag] = unit
 
         #tracking building morphs
         for tag in self.player_buildings:
             building = self.player_buildings[tag]
             if tag in self.prev_player_buildings and self.prev_player_buildings[tag].name != building.name:
                 self.new_buildings.append(building)
+                self.units2[building.tag] = building
 
 
         self.buildings_constructed[2] = self.buildings_constructed[1].copy()
@@ -223,26 +240,45 @@ class _ObservationAggregator(ObserverAI):
         self.units_built[2] = self.units_built[1]
         self.units_built[1] = self.units_built[0]
         self.units_built[0] = self.new_units
-        print("iteration")
-        print(iteration)
-        print("army + workers + new_units + new buildings + mins")
-        print(self.supply_army)
-        print(self.supply_workers)
-        print(self.new_units)
-        print(self.new_buildings)
-        print(self.minerals)
-        print(self.player_army)
-        print(self.supply_cap)
-        print(self.supply_left)
-        print(self.supply_used)
-        print(self.supply_army)
-        print(self.supply_workers)
+
+        self.data[iteration] = {
+            "visibility": self.visibility,
+            "enemy_units_seen_and_alive": self.enemy_units_seen_and_alive,
+            "player_pov": self.player_pov,
+            "buildings_constructed": self.buildings_constructed,
+            "new_buildings": self.new_buildings,
+            "player_buildings": self.player_buildings,
+            "player_army": self.player_army,
+            "new_units": self.new_units,
+            "units_built": self.units_built,
+            "workers_built": self.workers_built,
+            "army_built": self.army_built,
+            "prev_player_units": self.prev_player_units,
+            "supply_cap": self.supply_cap,
+            "supply_left": self.supply_left,
+            "supply_used": self.supply_used,
+            "supply_army": self.supply_army,
+            "supply_workers": self.supply_workers
+                                }
         # self.supply_cap
         # self.supply_left
         # self.supply_used
         # self.supply_army
         # self.supply_workers
-
+        # self.prev_player_buildings = {}
+        # self.step_size = step_size
+        # self.visibility = []
+        # self.enemy_units_seen_and_alive = {}
+        # self.player_pov = player_pov
+        # self.buildings_constructed = {0: [], 1: [], 2: []}
+        # self.new_buildings = []
+        # self.player_buildings = {}
+        # self.player_army = {}
+        # self.new_units = []
+        # self.units_built = {0: [], 1: [], 2: []}
+        # self.workers_built = 0
+        # self.army_built = 0
+        # self.prev_player_units = {}
 
 class ReplaySimulator:
     """
@@ -320,10 +356,32 @@ class ReplaySimulator:
         ), "Call simulator.run_simulation() before using this function!"
         return self.observer.number_of_units
 
+    def get_data(self):
+        assert (
+            self.completed_simulation
+        ), "Call simulator.run_simulation() before using this function!"
+        return self.observer.data
+
+class CustomEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, UnitTypeId):
+            return obj.value
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, Unit):
+            return extract_unit_details(obj)
+        return super().default(obj)
+
 if __name__ == "__main__":
     # Example use of the ReplaySimulator
     path = "tests/replays/Alcyone LE (3).SC2Replay"
     simulator = ReplaySimulator(path, fow_pov=1)
     #, step_size=60
     simulator.run_simulation()
-    visibility = simulator.get_visibility_map()
+    #visibility = simulator.get_visibility_map()
+    data = simulator.get_data()
+    with gzip.open("output.json.gz", "wt", encoding="utf-8") as f:
+        json.dump(data, f, cls=CustomEncoder)
+    for i in data:
+        print(data[i])
+

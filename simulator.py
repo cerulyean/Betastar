@@ -63,10 +63,8 @@ class _ObservationAggregator(ObserverAI):
         self.lifetimes = dict()
         self.visibility = []
         self.number_of_units = dict()
-        self.follow_unit = None
         self.enemy_units_seen_and_alive = {}
         self.player_pov = player_pov
-        self.player_actions = {}
         self.buildings_constructed = {0: [], 1: [], 2: []}
         self.new_buildings = []
         self.player_buildings = {}
@@ -211,6 +209,10 @@ class _ObservationAggregator(ObserverAI):
         self.buildings_constructed[2] = self.buildings_constructed[1].copy()
         self.buildings_constructed[1] = self.buildings_constructed[0].copy()
         self.buildings_constructed[0] = self.new_buildings
+
+        self.units_built[2] = self.units_built[1]
+        self.units_built[1] = self.units_built[0]
+        self.units_built[0] = self.new_units
         print("iteration")
         print(iteration)
         print("army + workers + new_units + new buildings + mins")

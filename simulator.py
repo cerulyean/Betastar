@@ -1,11 +1,8 @@
 import os
-import sys
 import platform
-from contextlib import nullcontext
 from pathlib import Path
 from typing import List, Dict
 
-import sc2.units
 from sc2.game_state import GameState
 from sc2.ids.unit_typeid import UnitTypeId
 from sc2.main import run_replay
@@ -47,7 +44,7 @@ def extract_unit_details(unit: Unit):
              "real_speed": unit.real_speed,
              "health_max": unit.health_max,
              "health": unit.health,
-             "shield_max": unit.shield,
+             "shield_max": unit.shield_max,
              "shield": unit.shield,
              "energy": unit.energy,
              "energy_max": unit.energy_max,
@@ -79,21 +76,6 @@ class _ObservationAggregator(ObserverAI):
         self.workers_built = 0
         self.army_built = 0
         self.prev_player_units = {}
-
-    async def on_unit_type_changed(self, unit: Unit, previous_type: UnitTypeId) -> None:
-        """Override this in your bot class. This function is called when a unit type has changed. To get the current UnitTypeId of the unit, use 'unit.type_id'
-
-        This may happen when a larva morphed to an egg, siege tank sieged, a zerg unit burrowed, a hatchery morphed to lair,
-        a corruptor morphed to broodlordcocoon, etc..
-#player structures total, player structures recently construted/morphed
-        Examples::
-
-            print(f"My unit changed type: {unit} from {previous_type} to {unit.type_id}")
-
-        :param unit:
-        :param previous_type:
-        """
-        raise Exception
 
     def _other(self, x:int = -1) -> int:
         if x == -1:
@@ -200,7 +182,7 @@ class _ObservationAggregator(ObserverAI):
                     #TODO i think update this to use supply instead. But i cant find where they keep supply cost for
                     # unit
 
-                    if unit.name not in NOT_ARMY:
+                    if unit.type_id not in NOT_ARMY:
                         self.army_built += 1
 
                 details = extract_unit_details(unit)
@@ -316,10 +298,10 @@ class ReplaySimulator:
         ), "Call simulator.run_simulation() before using this function!"
         return self.observer.number_of_units
 
-
-# Example use of the ReplaySimulator
-path = "tests/replays/Alcyone LE (3).SC2Replay"
-simulator = ReplaySimulator(path, fow_pov=1)
-#, step_size=60
-simulator.run_simulation()
-visibility = simulator.get_visibility_map()
+if __name__ == "__main__":
+    # Example use of the ReplaySimulator
+    path = "tests/replays/Alcyone LE (3).SC2Replay"
+    simulator = ReplaySimulator(path, fow_pov=1)
+    #, step_size=60
+    simulator.run_simulation()
+    visibility = simulator.get_visibility_map()

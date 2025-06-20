@@ -3,9 +3,10 @@ import sys
 import platform
 from contextlib import nullcontext
 from pathlib import Path
-from typing import List
+from typing import List, Dict
 
 import sc2.units
+from sc2.game_state import GameState
 from sc2.ids.unit_typeid import UnitTypeId
 from sc2.main import run_replay
 from sc2.observer_ai import ObserverAI
@@ -17,8 +18,40 @@ MAX_GRID_SIZE = 182
 NUMBER_OF_GRIDS = 20
 SIZE_OF_GRID = MAX_GRID_SIZE/NUMBER_OF_GRIDS
 NUM_PREDICTED_STEPS = 2
+WORKERS = [UnitTypeId.SCV, UnitTypeId.PROBE, UnitTypeId.DRONE]
+NOT_ARMY = WORKERS + [UnitTypeId.OVERLORD, UnitTypeId.OVERSEER, UnitTypeId.OVERLORDTRANSPORT]
 
-
+def extract_unit_details(unit: Unit):
+    return {"unit": unit,
+            "UNITTYPEID": unit.type_id,
+             "last_seen_position": unit.position,
+             "unit_type": unit.type_id,
+             "is_structure": unit.is_structure,
+             "is_light": unit.is_light,
+             "is_armored": unit.is_armored,
+             "is_biological": unit.is_biological,
+             "is_technical": unit.is_mechanical,
+             "is_massive": unit.is_massive,
+             "is_psionic": unit.is_psionic,
+             "can_attack": unit.can_attack,
+             "can_attack_both": unit.can_attack_both,
+             "can_attack_ground": unit.can_attack_ground,
+             "ground_dps": unit.ground_dps,
+             "ground_range": unit.ground_range,
+             "can_attack_air": unit.can_attack_air,
+             "air_dps": unit.air_dps,
+             "air_range": unit.air_range,
+             "bonus_damage": unit.bonus_damage,
+             "armor": unit.armor,
+             "movement_speed": unit.movement_speed,
+             "real_speed": unit.real_speed,
+             "health_max": unit.health_max,
+             "health": unit.health,
+             "shield_max": unit.shield,
+             "shield": unit.shield,
+             "energy": unit.energy,
+             "energy_max": unit.energy_max,
+             }
 
 class _ObservationAggregator(ObserverAI):
     """
@@ -41,6 +74,11 @@ class _ObservationAggregator(ObserverAI):
         self.new_buildings = []
         self.player_buildings = {}
         self.player_army = {}
+        self.new_units = []
+        self.units_built = {0: [], 1: [], 2: []}
+        self.workers_built = 0
+        self.army_built = 0
+        self.prev_player_units = {}
 
     async def on_unit_type_changed(self, unit: Unit, previous_type: UnitTypeId) -> None:
         """Override this in your bot class. This function is called when a unit type has changed. To get the current UnitTypeId of the unit, use 'unit.type_id'
@@ -76,6 +114,8 @@ class _ObservationAggregator(ObserverAI):
         :param unit:"""
         if unit.is_structure and unit.owner_id == self.player_pov:
             self.new_buildings.append(unit)
+        if not unit.is_structure and unit.owner_id == self.player_pov:
+            self.new_units.append(unit)
 
     async def on_unit_destroyed(self, unit_tag):
         """
@@ -94,10 +134,35 @@ class _ObservationAggregator(ObserverAI):
         if self.player_buildings.get(unit_tag) is not None:
             del self.player_buildings[unit_tag]
 
+    #testing to see if overriding breaks anything
+    #ok it doesnt. observer ai overrides this supposedly final method with some other garbage that broke support for
+    #supply_army and supply_workers. I put them back so i can use them for tracking total worker count and total
+    #army count
+    def _prepare_step(self, state, proto_game_info):
+        """
+        :param state:
+        :param proto_game_info:
+        """
+        # Set attributes from new state before on_step."""
+        self.state: GameState = state  # See game_state.py
+        # Required for events, needs to be before self.units are initialized so the old units are stored
+        self._units_previous_map: Dict = {unit.tag: unit for unit in self.units}
+        self._structures_previous_map: Dict = {structure.tag: structure for structure in self.structures}
+        self.supply_army: int = state.common.food_army
+        self.supply_workers: int = state.common.food_workers
+        self.minerals: int = state.common.minerals
+        self.vespene: int = state.common.vespene
+        self._prepare_units()
+
+    #todo include supply cap + current max supply
     async def on_step(self, iteration: int):
         # TODO: Only basic information is included for now, need to add more
         # stuff to aggregate later on
 
+        self.new_buildings = []
+        self.new_units = []
+        self.workers_built = 0
+        self.army_built = 0
         # Add Unit lifetime data
         for i in range(len(self.units)):
             unit = self.units[i]
@@ -117,59 +182,62 @@ class _ObservationAggregator(ObserverAI):
 
         self.prev_player_buildings = self.player_buildings.copy()
 
-        player_units = []
+        self.prev_player_units = self.player_army.copy()
+
+        #Tracking what enemy units detected
         for unit in self.units:
             if unit.owner_id == self._other() and unit.is_visible:
-                player_units.append(unit)
-                self.enemy_units_seen_and_alive[unit.tag] = {"unit": unit,
-                                                             "last_seen_position": unit.position,
-                                                             "unit_type": unit.type_id,
-                                                             "last_seen": iteration,
-                                                             "is_structure": unit.is_structure,
-                                                             "is_light": unit.is_light,
-                                                             "is_armored": unit.is_armored,
-                                                             "is_biological": unit.is_biological,
-                                                             "is_technical": unit.is_mechanical,
-                                                             "is_massive": unit.is_massive,
-                                                             "is_psionic": unit.is_psionic,
-                                                             "can_attack": unit.can_attack,
-                                                             "can_attack_both": unit.can_attack_both,
-                                                             "can_attack_ground": unit.can_attack_ground,
-                                                             "ground_dps": unit.ground_dps,
-                                                             "ground_range": unit.ground_range,
-                                                             "can_attack_air": unit.can_attack_air,
-                                                             "air_dps": unit.air_dps,
-                                                             "air_range": unit.air_range,
-                                                             "bonus_damage": unit.bonus_damage,
-                                                             "armor": unit.armor,
-                                                             "movement_speed": unit.movement_speed,
-                                                             "real_speed": unit.real_speed,
-                                                             "health_max": unit.health_max,
-                                                             "health": unit.health,
-                                                             "shield_max": unit.shield,
-                                                             "shield": unit.shield,
-                                                             "energy": unit.energy,
-                                                             "energy_max": unit.energy_max,
-                                                             }
+                details = extract_unit_details(unit)
+                details["last_seen"] = iteration
+                self.enemy_units_seen_and_alive[unit.tag] = details
+            #Tracking what new units are made + adding to army
             if unit.owner_id == self.player_pov and not unit.is_structure:
-                self.player_army[unit.tag] = unit
+                if unit.tag not in self.player_army:
+                    self.new_units.append(unit)
+                    #TODO scv and probe name might be incorrect just fix it
+                    if unit.type_id in WORKERS:
+                        self.workers_built += 1
+                    #TODO i think update this to use supply instead. But i cant find where they keep supply cost for
+                    # unit
 
+                    if unit.name not in NOT_ARMY:
+                        self.army_built += 1
+
+                details = extract_unit_details(unit)
+                self.player_army[unit.tag] = details
+
+            #tracking total structures + new structures
             if unit.owner_id == self.player_pov and unit.is_structure:
+                if unit.tag not in self.player_buildings:
+                    self.new_buildings.append(unit)
                 self.player_buildings[unit.tag] = unit
 
-        print(self.player_buildings)
-        print([unit_info["unit"] for unit_info in self.enemy_units_seen_and_alive.values()])
 
-        print(iteration)
-        #print(player_units)
+        #Tracking unit morphs
+        for tag in self.player_army:
+            unit = self.player_army[tag]["unit"]
+            if tag in self.prev_player_units and self.prev_player_units[tag]["unit"].name != unit.name:
+                self.new_units.append(unit)
 
-        for building in self.player_buildings:
-            if self.prev_player_buildings[building.tag].name != building.name:
+        #tracking building morphs
+        for tag in self.player_buildings:
+            building = self.player_buildings[tag]
+            if tag in self.prev_player_buildings and self.prev_player_buildings[tag].name != building.name:
                 self.new_buildings.append(building)
+
+
         self.buildings_constructed[2] = self.buildings_constructed[1].copy()
         self.buildings_constructed[1] = self.buildings_constructed[0].copy()
         self.buildings_constructed[0] = self.new_buildings
-        self.new_buildings = []
+        print("iteration")
+        print(iteration)
+        print("army + workers + new_units + new buildings + mins")
+        print(self.supply_army)
+        print(self.supply_workers)
+        print(self.new_units)
+        print(self.new_buildings)
+        print(self.minerals)
+        print(self.player_army)
 
 
 class ReplaySimulator:
@@ -250,7 +318,7 @@ class ReplaySimulator:
 
 
 # Example use of the ReplaySimulator
-path = "tests/replays/Alcyone LE (2).SC2Replay"
+path = "tests/replays/Alcyone LE (3).SC2Replay"
 simulator = ReplaySimulator(path, fow_pov=1)
 #, step_size=60
 simulator.run_simulation()

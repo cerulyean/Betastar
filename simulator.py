@@ -372,16 +372,18 @@ class CustomEncoder(json.JSONEncoder):
             return extract_unit_details(obj)
         return super().default(obj)
 
+#e.g. replay_name = "tests/replays/Alcyone LE (3).SC2Replay"
+#e.g. output_name = "output.json.gz"
+def extract_data(replay_name: str, output_name: str, player: int, fow_pov, step_size: int = 224):
+    simulator = ReplaySimulator(replay_name, fow_pov=fow_pov, step_size=step_size)
+    simulator.run_simulation()
+    data = simulator.get_data()
+    with gzip.open(output_name, "wt", encoding="utf-8") as f:
+        json.dump(data, f, cls=CustomEncoder)
+
+    return data
+
 if __name__ == "__main__":
     # Example use of the ReplaySimulator
-    path = "tests/replays/Alcyone LE (3).SC2Replay"
-    simulator = ReplaySimulator(path, fow_pov=1)
-    #, step_size=60
-    simulator.run_simulation()
-    #visibility = simulator.get_visibility_map()
-    data = simulator.get_data()
-    with gzip.open("output.json.gz", "wt", encoding="utf-8") as f:
-        json.dump(data, f, cls=CustomEncoder)
-    for i in data:
-        print(data[i])
+    print("hi")
 

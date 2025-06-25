@@ -3,13 +3,14 @@ from collections import Counter
 from typing import Dict, List, Set, Union, TYPE_CHECKING
 
 from sc2.cache import property_cache_once_per_frame
-from sc2.data import Alert, Race, Result
+from sc2.data import Alert, Race, Result, race_townhalls
 from sc2.game_data import GameData
 from sc2.bot_ai_internal import BotAIInternal
 
 # Imports for mypy and pycharm autocomplete as well as sphinx autodocumentation
 from sc2.game_state import Blip, GameState
 from sc2.ids.ability_id import AbilityId
+from sc2.ids.unit_typeid import UnitTypeId
 from sc2.ids.upgrade_id import UpgradeId
 from sc2.position import Point2
 from sc2.unit import Unit
@@ -237,6 +238,15 @@ class ObserverAI(BotAIInternal):
                 # Convert these units to effects: reaper grenade, parasitic bomb dummy, forcefield
                 unit_obj = Unit(unit, self)
                 self.units.append(unit_obj)
+
+                alliance = unit.alliance
+                if alliance == 1:
+                    self.all_own_units.append(unit_obj)
+                    unit_id: UnitTypeId = unit_obj.type_id
+                    if unit_obj.is_structure:
+                        self.structures.append(unit_obj)
+                        if unit_id in race_townhalls[self.race]:
+                            self.townhalls.append(unit_obj)
 
     async def _after_step(self) -> int:
         """ Executed by main.py after each on_step function. """

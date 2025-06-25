@@ -191,23 +191,6 @@ class _ObservationAggregator(ObserverAI):
         self.visibility[y:y + h, x:x + w] = playable_patch
 
 
-        # print("\n" * 100)
-        #
-        # temp = self.visibility.tolist()
-        # compressed = [[0] * 25 for _ in range(25)]
-        #
-        # for i, row in enumerate(temp):
-        #     for j, val in enumerate(row):
-        #         if val == 1:
-        #             compressed[i // 10][j // 10] = 1
-        #         if val == 2:
-        #             compressed[i // 10][j // 10] = 2
-        #
-        # for i in compressed:
-        #     print(i)
-        #
-        # time.sleep(1)
-
         # Counts unit number
         self.number_of_units[iteration] = self.all_units.amount
 
@@ -271,15 +254,14 @@ class _ObservationAggregator(ObserverAI):
         self.units_built[1] = self.units_built[0]
         self.units_built[0] = self.new_units
 
-        # Extract playable area bounds
         x_off, y_off, w, h = self.game_info.playable_area
-
         # Scale minimap [0–64] → playable area [x_off:x_off+w, y_off:y_off+h]
         px = int(self.start_location.x / 64 * w) + x_off
         py = int(self.start_location.y / 64 * h) + y_off
 
         ex = int(self.enemy_start_locations[0].x / 64 * w) + x_off
         ey = int(self.enemy_start_locations[0].y / 64 * w) + x_off
+
 
         self.data[iteration] = {
             "iteration": iteration,

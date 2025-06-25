@@ -129,10 +129,6 @@ class _ObservationAggregator(ObserverAI):
         if self.player_buildings.get(unit_tag) is not None:
             del self.player_buildings[unit_tag]
 
-    #testing to see if overriding breaks anything
-    #ok it doesnt. observer ai overrides this supposedly final method with some other garbage that broke support for
-    #supply_army and supply_workers. I put them back so i can use them for tracking total worker count and total
-    #army count
     def _prepare_step(self, state, proto_game_info):
         """
         :param state:
@@ -178,20 +174,13 @@ class _ObservationAggregator(ObserverAI):
 
         # Initialize the full-sized visibility map with -1
         self.visibility = np.full((248, 248), -1, dtype=int)
-
-        # Your 176×176 visibility input
-        # visibility = np.array(...)
-
-        # Playable region inside the 176×176 visibility array
+        # Playable region inside the visibility array
         x, y, w, h = self.game_info.playable_area
-        playable_patch = self.state.visibility.data_numpy[y:y + h, x:x + w]  # (140×140)
+        playable_patch = self.state.visibility.data_numpy[y:y + h, x:x + w]
 
-        # Decide where to place it in the 248×248 map.
-        # We'll center it at same position: starting at (18, 16)
         self.visibility[y:y + h, x:x + w] = playable_patch
 
 
-        # Counts unit number
         self.number_of_units[iteration] = self.all_units.amount
 
         self.prev_player_buildings = self.player_buildings.copy()
@@ -289,25 +278,6 @@ class _ObservationAggregator(ObserverAI):
             "enemy_spawn_x":ex,
             "enemy_spawn_y":ey
                                 }
-        # self.supply_cap
-        # self.supply_left
-        # self.supply_used
-        # self.supply_army
-        # self.supply_workers
-        # self.prev_player_buildings = {}
-        # self.step_size = step_size
-        # self.visibility = []
-        # self.enemy_units_seen_and_alive = {}
-        # self.player_pov = player_pov
-        # self.buildings_constructed = {0: [], 1: [], 2: []}
-        # self.new_buildings = []
-        # self.player_buildings = {}
-        # self.player_army = {}
-        # self.new_units = []
-        # self.units_built = {0: [], 1: [], 2: []}
-        # self.workers_built = 0
-        # self.army_built = 0
-        # self.prev_player_units = {}
 
 
 

@@ -187,6 +187,9 @@ class ObserverAI(BotAIInternal):
         self.game_data: GameData = game_data
         self.realtime: bool = realtime
         self.base_build: int = base_build
+        self.race: Race = Race(self.game_info.player_races[self.player_id])
+        if len(self.game_info.player_races) == 2:
+            self.enemy_race: Race = Race(self.game_info.player_races[3 - self.player_id])
 
     def _prepare_first_step(self):
         """First step extra preparations. Must not be called before _prepare_step."""

@@ -138,6 +138,7 @@ class _ObservationAggregator(ObserverAI):
         :param state:
         :param proto_game_info:
         """
+
         # Set attributes from new state before on_step."""
         self.state: GameState = state  # See game_state.py
         # Required for events, needs to be before self.units are initialized so the old units are stored
@@ -174,8 +175,38 @@ class _ObservationAggregator(ObserverAI):
             else:
                 self.lifetimes[unit.tag].positions.append(position)
 
-        # Add player visibility data
-        self.visibility = self.state.visibility.data_numpy
+
+        # Initialize the full-sized visibility map with -1
+        self.visibility = np.full((248, 248), -1, dtype=int)
+
+        # Your 176×176 visibility input
+        # visibility = np.array(...)
+
+        # Playable region inside the 176×176 visibility array
+        x, y, w, h = self.game_info.playable_area
+        playable_patch = self.state.visibility.data_numpy[y:y + h, x:x + w]  # (140×140)
+
+        # Decide where to place it in the 248×248 map.
+        # We'll center it at same position: starting at (18, 16)
+        self.visibility[y:y + h, x:x + w] = playable_patch
+
+
+        # print("\n" * 100)
+        #
+        # temp = self.visibility.tolist()
+        # compressed = [[0] * 25 for _ in range(25)]
+        #
+        # for i, row in enumerate(temp):
+        #     for j, val in enumerate(row):
+        #         if val == 1:
+        #             compressed[i // 10][j // 10] = 1
+        #         if val == 2:
+        #             compressed[i // 10][j // 10] = 2
+        #
+        # for i in compressed:
+        #     print(i)
+        #
+        # time.sleep(1)
 
         # Counts unit number
         self.number_of_units[iteration] = self.all_units.amount
@@ -240,7 +271,18 @@ class _ObservationAggregator(ObserverAI):
         self.units_built[1] = self.units_built[0]
         self.units_built[0] = self.new_units
 
+        # Extract playable area bounds
+        x_off, y_off, w, h = self.game_info.playable_area
+
+        # Scale minimap [0–64] → playable area [x_off:x_off+w, y_off:y_off+h]
+        px = int(self.start_location.x / 64 * w) + x_off
+        py = int(self.start_location.y / 64 * h) + y_off
+
+        ex = int(self.enemy_start_locations[0].x / 64 * w) + x_off
+        ey = int(self.enemy_start_locations[0].y / 64 * w) + x_off
+
         self.data[iteration] = {
+            "iteration": iteration,
             "visibility": self.visibility,
             "enemy_units_seen_and_alive": self.enemy_units_seen_and_alive,
             "player_pov": self.player_pov,
@@ -257,7 +299,13 @@ class _ObservationAggregator(ObserverAI):
             "supply_left": self.supply_left,
             "supply_used": self.supply_used,
             "supply_army": self.supply_army,
-            "supply_workers": self.supply_workers
+            "supply_workers": self.supply_workers,
+            "own_race":self.race,
+            "enemy_race":self.enemy_race,
+            "own_spawn_x":px,
+            "own_spawn_y":py,
+            "enemy_spawn_x":ex,
+            "enemy_spawn_y":ey
                                 }
         # self.supply_cap
         # self.supply_left
@@ -278,6 +326,8 @@ class _ObservationAggregator(ObserverAI):
         # self.workers_built = 0
         # self.army_built = 0
         # self.prev_player_units = {}
+
+
 
 class ReplaySimulator:
     """
@@ -378,25 +428,27 @@ def extract_data(replay_name: str, output_name: str, fow_pov, step_size: int = 2
     simulator = ReplaySimulator(replay_name, fow_pov=fow_pov, step_size=step_size)
     simulator.run_simulation()
     data = simulator.get_data()
+
+
     with gzip.open(output_name, "wt", encoding="utf-8") as f:
         json.dump(data, f, cls=CustomEncoder)
 
     return data
 
-if __name__ == "__main__":
-    # Example use of the ReplaySimulator
+def process_folder(input_folder="1000 replays", output_folder="1000 extracts"):
     t0 = time.time()
     count = 0
-    os.makedirs("1000 extracts", exist_ok=True)
-    folder_path = "1000 replays"
+    os.makedirs(output_folder, exist_ok=True)
+    folder_path = input_folder
     print("count number: " + str(count))
     for filename in os.listdir(folder_path):
         file_path = os.path.join(folder_path, filename)
-        output_path = os.path.join("1000 extracts", filename)
+        output_path = os.path.join(output_folder, filename)
         output_path_p1 = output_path + "_p1.json.gz"
         output_path_p2 = output_path + "_p2.json.gz"
 
         if os.path.exists(output_path_p1) and os.path.exists(output_path_p2):
+            print("skipped")
             continue
         if os.path.isfile(file_path):
             extract_data(file_path, output_name=output_path + "_p1.json.gz", fow_pov=1)
@@ -406,6 +458,13 @@ if __name__ == "__main__":
         hours, minutes = divmod(minutes, 60)
         print(f"{hours}h {minutes}m {seconds}s")
         print(datetime.now().strftime("%H:%M:%S"))  # 24-hour time
+
+if __name__ == "__main__":
+    print("hi")
+    simulator = ReplaySimulator("tests/replays/Amphion LE.SC2Replay", fow_pov=1, step_size=22)
+    simulator.run_simulation()
+    pixelmap_x_length, pixelmap_y_length = simulator.observer.state.visibility.data_numpy.shape
+
 
 
 

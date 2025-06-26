@@ -444,7 +444,7 @@ async def _setup_replay(server, replay_path, realtime, observed_id):
 async def _host_replay(replay_path, ai, realtime, _portconfig, base_build, data_version, observed_id):
     async with SC2Process(fullscreen=False, base_build=base_build, data_hash=data_version) as server:
         client = await _setup_replay(server, replay_path, realtime, observed_id)
-        result = await _play_replay(client, ai, realtime)
+        result = await _play_replay(client, ai, realtime, player_id = observed_id)
         return result
 
 

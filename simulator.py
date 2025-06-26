@@ -8,6 +8,7 @@ from typing import List, Dict
 
 import numpy as np
 
+from sc2.data import Race
 from sc2.game_state import GameState
 from sc2.ids.unit_typeid import UnitTypeId
 from sc2.main import run_replay
@@ -173,14 +174,16 @@ class _ObservationAggregator(ObserverAI):
 
 
         # Initialize the full-sized visibility map with -1
-        self.visibility = np.full((248, 248), -1, dtype=int)
-        # Playable region inside the visibility array
+        self.visibility = np.full((256, 256), -1, dtype=int)
+
         x, y, w, h = self.game_info.playable_area
         playable_patch = self.state.visibility.data_numpy[y:y + h, x:x + w]
 
+        # Decide where to place it in the 256×256 map.
         self.visibility[y:y + h, x:x + w] = playable_patch
 
 
+        # Counts unit number
         self.number_of_units[iteration] = self.all_units.amount
 
         self.prev_player_buildings = self.player_buildings.copy()
@@ -254,7 +257,7 @@ class _ObservationAggregator(ObserverAI):
 
         self.data[iteration] = {
             "iteration": iteration,
-            "visibility": self.visibility,
+            "visibility": self.visibility.tolist(),
             "enemy_units_seen_and_alive": self.enemy_units_seen_and_alive,
             "player_pov": self.player_pov,
             "buildings_constructed": self.buildings_constructed,
@@ -371,6 +374,8 @@ class CustomEncoder(json.JSONEncoder):
             return obj.tolist()
         if isinstance(obj, Unit):
             return extract_unit_details(obj)
+        if isinstance(obj, Race):
+            return "zerg" if obj == Race.Zerg else "terran" if obj == Race.Terran else "protoss" if obj == Race.Protoss else "random" if obj == Race.Random else "unknown"
         return super().default(obj)
 
 #e.g. replay_name = "tests/replays/Alcyone LE (3).SC2Replay"
@@ -380,7 +385,6 @@ def extract_data(replay_name: str, output_name: str, fow_pov, step_size: int = 2
     simulator = ReplaySimulator(replay_name, fow_pov=fow_pov, step_size=step_size)
     simulator.run_simulation()
     data = simulator.get_data()
-
 
     with gzip.open(output_name, "wt", encoding="utf-8") as f:
         json.dump(data, f, cls=CustomEncoder)
@@ -392,8 +396,9 @@ def process_folder(input_folder="1000 replays", output_folder="1000 extracts"):
     count = 0
     os.makedirs(output_folder, exist_ok=True)
     folder_path = input_folder
-    print("count number: " + str(count))
     for filename in os.listdir(folder_path):
+        print("count number: " + str(count))
+        print(filename)
         file_path = os.path.join(folder_path, filename)
         output_path = os.path.join(output_folder, filename)
         output_path_p1 = output_path + "_p1.json.gz"
@@ -410,12 +415,15 @@ def process_folder(input_folder="1000 replays", output_folder="1000 extracts"):
         hours, minutes = divmod(minutes, 60)
         print(f"{hours}h {minutes}m {seconds}s")
         print(datetime.now().strftime("%H:%M:%S"))  # 24-hour time
+        count += 1
+        return
 
 if __name__ == "__main__":
-    print("hi")
-    simulator = ReplaySimulator("tests/replays/Amphion LE.SC2Replay", fow_pov=1, step_size=22)
-    simulator.run_simulation()
-    pixelmap_x_length, pixelmap_y_length = simulator.observer.state.visibility.data_numpy.shape
+    # print("hi")
+    # simulator = ReplaySimulator("1000 replays/26382815.SC2Replay", fow_pov=1, step_size=22)
+    # simulator.run_simulation()
+    # pixelmap_x_length, pixelmap_y_length = simulator.observer.state.visibility.data_numpy.shape
+    process_folder()
 
 
 

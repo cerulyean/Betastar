@@ -28,7 +28,6 @@ NOT_ARMY = WORKERS + [UnitTypeId.OVERLORD, UnitTypeId.OVERSEER, UnitTypeId.OVERL
 
 def extract_unit_details(unit: Unit):
      return {"tag": unit.tag,
-            "UNITTYPEID": unit.type_id,
              "last_seen_position": unit.position,
              "unit_type": unit.type_id,
              "is_structure": unit.is_structure,
@@ -73,21 +72,15 @@ class _ObservationAggregator(ObserverAI):
         self.number_of_units = dict()
         self.enemy_units_seen_and_alive = {}
         self.player_pov = player_pov
-        self.buildings_constructed = {0: [], 1: [], 2: []}
-        self.new_buildings = []
+        self.buildings_constructed = {0: {}, 1: {}, 2: {}}
+        self.new_buildings = {}
         self.player_buildings = {}
         self.player_army = {}
-        self.new_units = []
-        self.units_built = {0: [], 1: [], 2: []}
+        self.new_units = {}
+        self.units_built = {0: {}, 1: {}, 2: {}}
         self.workers_built = 0
         self.army_built = 0
         self.prev_player_units = {}
-        #These are supply things already done
-        # self.supply_cap
-        # self.supply_left
-        # self.supply_used
-        # self.supply_army
-        # self.supply_army
         self.data = {}
         self.units2 = {}
 
@@ -109,9 +102,11 @@ class _ObservationAggregator(ObserverAI):
 
         :param unit:"""
         if unit.is_structure and unit.owner_id == self.player_pov:
-            self.new_buildings.append(unit)
+            # self.new_buildings.append(unit)
+            self.new_buildings[unit.tag] = unit
         if not unit.is_structure and unit.owner_id == self.player_pov:
-            self.new_units.append(unit)
+            # self.new_units.append(unit)
+            self.new_units[unit.tag] = unit
 
     async def on_unit_destroyed(self, unit_tag):
         """
@@ -157,8 +152,8 @@ class _ObservationAggregator(ObserverAI):
         # TODO: Only basic information is included for now, need to add more
         # stuff to aggregate later on
 
-        self.new_buildings = []
-        self.new_units = []
+        self.new_buildings = {}
+        self.new_units = {}
         self.workers_built = 0
         self.army_built = 0
         # Add Unit lifetime data
@@ -200,13 +195,13 @@ class _ObservationAggregator(ObserverAI):
             #Tracking what new units are made + adding to army
             if unit.owner_id == self.player_pov and not unit.is_structure:
                 if unit.tag not in self.player_army:
-                    self.new_units.append(unit)
+                    # self.new_units.append(unit)
+                    self.new_units[unit.tag] = unit
                     self.units2[unit.tag] = unit
                     if unit.type_id in WORKERS:
                         self.workers_built += 1
                     #TODO i think update this to use supply instead. But i cant find where they keep supply cost for
                     # unit
-
                     if unit.type_id not in NOT_ARMY:
                         self.army_built += 1
 
@@ -217,7 +212,8 @@ class _ObservationAggregator(ObserverAI):
             #tracking total structures + new structures
             if unit.owner_id == self.player_pov and unit.is_structure:
                 if unit.tag not in self.player_buildings:
-                    self.new_buildings.append(unit)
+                    # self.new_buildings.append(unit)
+                    self.new_buildings[unit.tag] = unit
                     self.units2[unit.tag] = unit
                 self.player_buildings[unit.tag] = unit
                 self.units2[unit.tag] = unit
@@ -226,15 +222,17 @@ class _ObservationAggregator(ObserverAI):
         #Tracking unit morphs
         for tag in self.player_army:
             unit = self.units2[tag]
-            if tag in self.prev_player_units and self.prev_player_units[tag]["UNITTYPEID"] != unit.type_id:
-                self.new_units.append(unit)
+            if tag in self.prev_player_units and self.prev_player_units[tag]["unit_type"] != unit.type_id:
+                # self.new_units.append(unit)
+                self.new_units[tag] = unit
                 self.units2[unit.tag] = unit
 
         #tracking building morphs
         for tag in self.player_buildings:
             building = self.player_buildings[tag]
             if tag in self.prev_player_buildings and self.prev_player_buildings[tag].name != building.name:
-                self.new_buildings.append(building)
+                # self.new_buildings.append(building)
+                self.new_buildings[tag] = building
                 self.units2[building.tag] = building
 
 
@@ -255,20 +253,17 @@ class _ObservationAggregator(ObserverAI):
         ey = int(self.enemy_start_locations[0].y / 64 * w) + x_off
 
 
-        self.data[iteration] = {
-            "iteration": iteration,
+        self.data[int(iteration)] = {
+            "iteration": int(iteration),
             "visibility": self.visibility.tolist(),
-            "enemy_units_seen_and_alive": self.enemy_units_seen_and_alive,
+            "enemy_units_seen_and_alive": self.enemy_units_seen_and_alive.copy(),
             "player_pov": self.player_pov,
             "buildings_constructed": self.buildings_constructed,
-            "new_buildings": self.new_buildings,
             "player_buildings": self.player_buildings,
             "player_army": self.player_army,
-            "new_units": self.new_units,
             "units_built": self.units_built,
             "workers_built": self.workers_built,
             "army_built": self.army_built,
-            "prev_player_units": self.prev_player_units,
             "supply_cap": self.supply_cap,
             "supply_left": self.supply_left,
             "supply_used": self.supply_used,
@@ -279,7 +274,9 @@ class _ObservationAggregator(ObserverAI):
             "own_spawn_x":px,
             "own_spawn_y":py,
             "enemy_spawn_x":ex,
-            "enemy_spawn_y":ey
+            "enemy_spawn_y":ey,
+            "minerals": self.minerals,
+            "gas":self.vespene
                                 }
 
 
@@ -417,7 +414,6 @@ def process_folder(input_folder="1000 replays", output_folder="1000 extracts"):
         print(datetime.now().strftime("%H:%M:%S"))  # 24-hour time
         count += 1
         return
-
 if __name__ == "__main__":
     # print("hi")
     # simulator = ReplaySimulator("1000 replays/26382815.SC2Replay", fow_pov=1, step_size=22)

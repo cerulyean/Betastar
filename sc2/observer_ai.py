@@ -280,19 +280,19 @@ class ObserverAI(BotAIInternal):
             await self.on_upgrade_complete(upgrade_completed)
         self._previous_upgrades = self.state.upgrades
 
-    # async def _issue_building_events(self):
-    #     for structure in self.structures:
-    #         # Check build_progress < 1 to exclude starting townhall
-    #         if structure.tag not in self._structures_previous_map and structure.build_progress < 1:
-    #             await self.on_building_construction_started(structure)
-    #             continue
-    #         # From here on, only check completed structure, so we ignore structures with build_progress < 1
-    #         if structure.build_progress < 1:
-    #             continue
-    #         # Using get function in case somehow the previous structure map (from last frame) does not contain this structure
-    #         structure_prev = self._structures_previous_map.get(structure.tag, None)
-    #         if structure_prev and structure_prev.build_progress < 1:
-    #             await self.on_building_construction_complete(structure)
+    async def _issue_building_events(self):
+        for structure in self.structures:
+            # Check build_progress < 1 to exclude starting townhall
+            if structure.tag not in self._structures_previous_map and structure.build_progress < 1:
+                await self.on_building_construction_started(structure)
+                continue
+            # From here on, only check completed structure, so we ignore structures with build_progress < 1
+            if structure.build_progress < 1:
+                continue
+            # Using get function in case somehow the previous structure map (from last frame) does not contain this structure
+            structure_prev = self._structures_previous_map.get(structure.tag, None)
+            if structure_prev and structure_prev.build_progress < 1:
+                await self.on_building_construction_complete(structure)
 
     async def _issue_unit_dead_events(self):
         for unit_tag in self.state.dead_units:

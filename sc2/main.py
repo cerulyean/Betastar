@@ -227,7 +227,6 @@ async def _play_game(
 
 async def _play_replay(client, ai, realtime: bool = False, player_id: int = 1):
     ai._initialize_variables()
-
     game_data = await client.get_game_data()
     game_info = await client.get_game_info()
     ping_response = await client.ping()

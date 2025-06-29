@@ -3,13 +3,14 @@ from collections import Counter
 from typing import Dict, List, Set, Union, TYPE_CHECKING
 
 from sc2.cache import property_cache_once_per_frame
-from sc2.data import Alert, Race, Result
+from sc2.data import Alert, Race, Result, race_townhalls
 from sc2.game_data import GameData
 from sc2.bot_ai_internal import BotAIInternal
 
 # Imports for mypy and pycharm autocomplete as well as sphinx autodocumentation
 from sc2.game_state import Blip, GameState
 from sc2.ids.ability_id import AbilityId
+from sc2.ids.unit_typeid import UnitTypeId
 from sc2.ids.upgrade_id import UpgradeId
 from sc2.position import Point2
 from sc2.unit import Unit
@@ -187,6 +188,9 @@ class ObserverAI(BotAIInternal):
         self.game_data: GameData = game_data
         self.realtime: bool = realtime
         self.base_build: int = base_build
+        self.race: Race = Race(self.game_info.player_races[self.player_id])
+        if len(self.game_info.player_races) == 2:
+            self.enemy_race: Race = Race(self.game_info.player_races[3 - self.player_id])
 
     def _prepare_first_step(self):
         """First step extra preparations. Must not be called before _prepare_step."""
@@ -204,7 +208,10 @@ class ObserverAI(BotAIInternal):
         # Required for events, needs to be before self.units are initialized so the old units are stored
         self._units_previous_map: Dict = {unit.tag: unit for unit in self.units}
         self._structures_previous_map: Dict = {structure.tag: structure for structure in self.structures}
-
+        self._enemy_units_previous_map: dict[int, Unit] = {unit.tag: unit for unit in self.enemy_units}
+        self._enemy_structures_previous_map: dict[int, Unit] = {
+            structure.tag: structure for structure in self.enemy_structures
+        }
         self._prepare_units()
 
     def _prepare_units(self):
@@ -235,6 +242,21 @@ class ObserverAI(BotAIInternal):
                 unit_obj = Unit(unit, self)
                 self.units.append(unit_obj)
 
+                alliance = unit.alliance
+                if alliance == 1:
+                    self.all_own_units.append(unit_obj)
+                    unit_id: UnitTypeId = unit_obj.type_id
+                    if unit_obj.is_structure:
+                        self.structures.append(unit_obj)
+                        if unit_id in race_townhalls[self.race]:
+                            self.townhalls.append(unit_obj)
+                elif alliance == 4:
+                    self.all_enemy_units.append(unit_obj)
+                    if unit_obj.is_structure:
+                        self.enemy_structures.append(unit_obj)
+                    else:
+                        self.enemy_units.append(unit_obj)
+
     async def _after_step(self) -> int:
         """ Executed by main.py after each on_step function. """
         self.unit_tags_received_action.clear()
@@ -254,6 +276,7 @@ class ObserverAI(BotAIInternal):
         await self._issue_unit_added_events()
         await self._issue_building_events()
         await self._issue_upgrade_events()
+        await self._issue_vision_events()
 
     async def _issue_unit_added_events(self):
         for unit in self.units:
@@ -267,41 +290,40 @@ class ObserverAI(BotAIInternal):
             await self.on_upgrade_complete(upgrade_completed)
         self._previous_upgrades = self.state.upgrades
 
-    # async def _issue_building_events(self):
-    #     for structure in self.structures:
-    #         # Check build_progress < 1 to exclude starting townhall
-    #         if structure.tag not in self._structures_previous_map and structure.build_progress < 1:
-    #             await self.on_building_construction_started(structure)
-    #             continue
-    #         # From here on, only check completed structure, so we ignore structures with build_progress < 1
-    #         if structure.build_progress < 1:
-    #             continue
-    #         # Using get function in case somehow the previous structure map (from last frame) does not contain this structure
-    #         structure_prev = self._structures_previous_map.get(structure.tag, None)
-    #         if structure_prev and structure_prev.build_progress < 1:
-    #             await self.on_building_construction_complete(structure)
+    async def _issue_building_events(self):
+        for structure in self.structures:
+            # Check build_progress < 1 to exclude starting townhall
+            if structure.tag not in self._structures_previous_map and structure.build_progress < 1:
+                await self.on_building_construction_started(structure)
+                continue
+            # From here on, only check completed structure, so we ignore structures with build_progress < 1
+            if structure.build_progress < 1:
+                continue
+            # Using get function in case somehow the previous structure map (from last frame) does not contain this structure
+            structure_prev = self._structures_previous_map.get(structure.tag, None)
+            if structure_prev and structure_prev.build_progress < 1:
+                await self.on_building_construction_complete(structure)
 
     async def _issue_unit_dead_events(self):
         for unit_tag in self.state.dead_units:
             await self.on_unit_destroyed(unit_tag)
 
-    # async def _issue_vision_events(self) -> None:
-    #     # Call events for enemy unit entered vision
-    #     for enemy_unit in self.enemy_units:
-    #         if enemy_unit.tag not in self._enemy_units_previous_map:
-    #             await self.on_enemy_unit_entered_vision(enemy_unit)
-    #     for enemy_structure in self.enemy_structures:
-    #         if enemy_structure.tag not in self._enemy_structures_previous_map:
-    #             await self.on_enemy_unit_entered_vision(enemy_structure)
-    #
-    #     # Call events for enemy unit left vision
-    #     enemy_units_left_vision: set[int] = set(self._enemy_units_previous_map) - self.enemy_units.tags
-    #     print("Hello")
-    #     for enemy_unit_tag in enemy_units_left_vision:
-    #         await self.on_enemy_unit_left_vision(enemy_unit_tag)
-    #     enemy_structures_left_vision: set[int] = set(self._enemy_structures_previous_map) - self.enemy_structures.tags
-    #     for enemy_structure_tag in enemy_structures_left_vision:
-    #         await self.on_enemy_unit_left_vision(enemy_structure_tag)
+    async def _issue_vision_events(self) -> None:
+        # Call events for enemy unit entered vision
+        for enemy_unit in self.enemy_units:
+            if enemy_unit.tag not in self._enemy_units_previous_map:
+                await self.on_enemy_unit_entered_vision(enemy_unit)
+        for enemy_structure in self.enemy_structures:
+            if enemy_structure.tag not in self._enemy_structures_previous_map:
+                await self.on_enemy_unit_entered_vision(enemy_structure)
+
+        # Call events for enemy unit left vision
+        enemy_units_left_vision: set[int] = set(self._enemy_units_previous_map) - self.enemy_units.tags
+        for enemy_unit_tag in enemy_units_left_vision:
+            await self.on_enemy_unit_left_vision(enemy_unit_tag)
+        enemy_structures_left_vision: set[int] = set(self._enemy_structures_previous_map) - self.enemy_structures.tags
+        for enemy_structure_tag in enemy_structures_left_vision:
+            await self.on_enemy_unit_left_vision(enemy_structure_tag)
 
     async def on_unit_destroyed(self, unit_tag):
         """

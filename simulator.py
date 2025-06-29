@@ -153,6 +153,8 @@ class _ObservationAggregator(ObserverAI):
         self.final_data = {}
         self.newly_queued = {unit.value: 0 for unit in VALID_UNITS[Race.Zerg]}
 
+        self.seen: Dict[int: bool] = {}
+
     def _other(self, x:int = -1) -> int:
         if x == -1:
             return self._other(self.player_pov)
@@ -185,6 +187,8 @@ class _ObservationAggregator(ObserverAI):
         details["last_seen"] = self.iteration
         self.enemy_units_seen_and_alive[unit.tag] = details
         self.units2[unit.tag] = unit
+        if unit.tag not in self.seen:
+            self.seen[unit.tag] = True
 
     async def on_unit_destroyed(self, unit_tag):
         """
@@ -537,7 +541,7 @@ class CustomEncoder(json.JSONEncoder):
             return "zerg" if obj == Race.Zerg else "terran" if obj == Race.Terran else "protoss" if obj == Race.Protoss else "random" if obj == Race.Random else "unknown"
         return super().default(obj)
 
-#e.g. replay_name = "tests/replays/Alcyone LE (3).SC2Replay"
+#e.g. replay_name = "tests/replays/Alcyone LE (6).SC2Replay"
 #e.g. output_name = "output.json.gz"
 #224 step size is 10s
 def extract_data(replay_name: str, output_name: str, fow_pov, step_size: int = 22):
@@ -588,7 +592,7 @@ if __name__ == "__main__":
     # simulator = ReplaySimulator("1000 replays/26382815.SC2Replay", fow_pov=1, step_size=224)
     # simulator.run_simulation()
     # pixelmap_x_length, pixelmap_y_length = simulator.observer.state.visibility.data_numpy.shape
-    process_folder()
+    extract_data("tests/replays/Alcyone LE (6).SC2Replay", "output.json.gz", 1)
 
 
 #todo I need to make sure the vision things are correct. Must test. I dont understand why they are different

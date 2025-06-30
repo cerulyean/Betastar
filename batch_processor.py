@@ -1,47 +1,52 @@
-import json
-import time
-import os
-import subprocess
+import argparse, json, os, subprocess, time
 from datetime import datetime
-
-from simulator import extract_data
 
 STEP_SIZE = 1
 
-def process_folder(input_folder="1000 replays", output_folder="1000 extracts"):
-    # extract only zvp games
-    with open("data.json", "r") as f:
+def process_folder(input_folder="replays",
+                   output_folder="output",
+                   max_parallel=4):
+    with open("data.json") as f:
         detailed_info = json.load(f)
-    t0 = time.time()
-    count = 0
-    os.makedirs(output_folder, exist_ok=True)
-    folder_path = input_folder
-    for filename in os.listdir(folder_path):
-        id = filename.removesuffix(".SC2Replay")
-        if detailed_info[id]["zerg"] != True or detailed_info[id]["protoss"] != True:
-            continue
-        print("count number: " + str(count))
-        print(filename)
-        file_path = os.path.join(folder_path, filename)
-        output_path = os.path.join(output_folder, filename)
-        output_path_p1 = output_path + "_p1.json.gz"
-        output_path_p2 = output_path + "_p2.json.gz"
 
-        if os.path.exists(output_path_p1) and os.path.exists(output_path_p2):
-            print("skipped")
+    os.makedirs(output_folder, exist_ok=True)
+    running = []
+    t0 = time.time()
+
+    for count, filename in enumerate(os.listdir(input_folder), 1):
+        game_id = filename.removesuffix(".SC2Replay")
+        info = detailed_info.get(game_id)
+        if not info or not (info["zerg"] and info["protoss"]):
             continue
-        if os.path.isfile(file_path):
-            cmd_p1 = ["python", "simulator.py", file_path, output_path_p1, str(1), str(STEP_SIZE)]
-            cmd_p2 = ["python", "simulator.py", file_path, output_path_p2, str(2), str(STEP_SIZE)]
-            subprocess.Popen(cmd_p1)
-            subprocess.Popen(cmd_p2)
-        elapsed = time.time() - t0
-        minutes, seconds = divmod(int(elapsed), 60)
-        hours, minutes = divmod(minutes, 60)
-        print(f"{hours}h {minutes}m {seconds}s")
-        print(datetime.now().strftime("%H:%M:%S"))  # 24-hour time
-        count += 1
-        return
+
+        file_path   = os.path.join(input_folder, filename)
+        output_base = os.path.join(output_folder, filename)
+        p1_path, p2_path = output_base + "_p1.json.gz", output_base + "_p2.json.gz"
+
+        if os.path.exists(p1_path) and os.path.exists(p2_path):
+            continue
+
+        running.append(subprocess.Popen(
+            ["python", "simulator.py", file_path, p1_path, "1", str(STEP_SIZE)]))
+        running.append(subprocess.Popen(
+            ["python", "simulator.py", file_path, p2_path, "2", str(STEP_SIZE)]))
+
+        while len(running) >= max_parallel:
+            running = [p for p in running if p.poll() is None]
+            if len(running) >= max_parallel:
+                time.sleep(0.1)
+
+        elapsed = int(time.time() - t0)
+        h, m = divmod(elapsed // 60, 60)
+        print(f"[{count}] {filename}  |  {h}h {m}m {elapsed%60}s "
+              f"({datetime.now():%H:%M:%S})")
+
+    for p in running:
+        p.wait()
 
 if __name__ == "__main__":
-    process_folder("replays", "output")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--max-procs", type=int, default=4,
+                    help="maximum concurrent simulator processes")
+    args = ap.parse_args()
+    process_folder(max_parallel=args.max_procs)

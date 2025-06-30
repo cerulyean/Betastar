@@ -596,7 +596,7 @@ if __name__ == "__main__":
     # pixelmap_x_length, pixelmap_y_length = simulator.observer.state.visibility.data_numpy.shape
     # extract_data("tests/replays/Alcyone LE (7).SC2Replay", "output.json.gz", 1)
 
-    assert (len(sys.argv) == 5, "Usage: python simulator.py replay_path output_path fow_pov step_size") 
+    assert len(sys.argv) == 5, "Usage: python simulator.py replay_path output_path fow_pov step_size"
 
     replay_path = sys.argv[1]
     output_path = sys.argv[2]

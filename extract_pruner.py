@@ -1,4 +1,4 @@
-#point of this file is the compile the data to more usable forms.
+# point of this file is the compile the data to more usable forms.
 
 
 import gzip
@@ -10,22 +10,32 @@ from numpy.ma.extras import compress_rows
 # with gzip.open('1000 extracts/26382813.SC2Replay_p1.json.gz', 'rt', encoding='utf-8') as f:
 #     data = json.load(f)
 
-with gzip.open('1000 extracts/26382815.SC2Replay_p1.json.gz', 'rt', encoding='utf-8') as f:
+with gzip.open(
+    "1000 extracts/26382815.SC2Replay_p1.json.gz", "rt", encoding="utf-8"
+) as f:
     data = json.load(f)
 
+
 def prune_unit_data(original_unit, current_state_iteration):
-    pruned = {k: original_unit[k] for k in
-              ["tag", "unit_type", "health", "shield", "energy", "is_structure"]}
+    pruned = {
+        k: original_unit[k]
+        for k in ["tag", "unit_type", "health", "shield", "energy", "is_structure"]
+    }
     pruned["last_seen_x"], pruned["last_seen_y"] = (
-        original_unit["last_seen_position"][0], original_unit["last_seen_position"][1])
+        original_unit["last_seen_position"][0],
+        original_unit["last_seen_position"][1],
+    )
     if "last_seen" in original_unit.keys():
         last_seen = current_state_iteration - original_unit["last_seen"]
-        pruned["last_seen"] =  last_seen
+        pruned["last_seen"] = last_seen
     return pruned
 
+
 def prune_visiblity(visibility):
-    compressed = [[-1 for _ in range((len(visibility[0]) + 9) // 10)]
-                  for _ in range((len(visibility) + 9) // 10)]
+    compressed = [
+        [-1 for _ in range((len(visibility[0]) + 9) // 10)]
+        for _ in range((len(visibility) + 9) // 10)
+    ]
 
     for i, row in enumerate(visibility):
         for j, val in enumerate(row):
@@ -40,48 +50,76 @@ def prune_visiblity(visibility):
 
     return compressed
 
-def prune_dict_of_dicts(unit_dict:dict, current_iteration):
+
+def prune_dict_of_dicts(unit_dict: dict, current_iteration):
     new_dict = {}
     for i in unit_dict:
         new_dict[i] = prune_dict_of_units(unit_dict[i], current_iteration)
     return new_dict
 
-def prune_dict_of_units(unit_dict:dict, current_iteration):
+
+def prune_dict_of_units(unit_dict: dict, current_iteration):
     new_dict = {}
     for i in unit_dict:
         new_dict[i] = prune_unit_data(unit_dict[i], current_iteration)
     return new_dict
 
+
 ##This will be the base. The following is for playing with model inputs
 def prune_state(original_state: dict) -> dict:
     current_iteration = original_state["iteration"]
-    pruned = {k: original_state[k] for k in
-                ["iteration", "player_pov", "own_spawn_x", "own_spawn_y", "enemy_spawn_x", "enemy_spawn_y", "own_race",
-                 "enemy_race", "supply_army", "supply_workers", "supply_used", "supply_left", "supply_cap",
-                 "workers_built", "army_built", "minerals", "gas", "under_construction"]}
+    pruned = {
+        k: original_state[k]
+        for k in [
+            "iteration",
+            "player_pov",
+            "own_spawn_x",
+            "own_spawn_y",
+            "enemy_spawn_x",
+            "enemy_spawn_y",
+            "own_race",
+            "enemy_race",
+            "supply_army",
+            "supply_workers",
+            "supply_used",
+            "supply_left",
+            "supply_cap",
+            "workers_built",
+            "army_built",
+            "minerals",
+            "gas",
+            "under_construction",
+        ]
+    }
     pruned["visibility"] = prune_visiblity(original_state["visibility"])
-    pruned.update({
-        k: prune_dict_of_units(original_state[k], current_iteration)
-        for k in ["player_buildings", "player_units", "enemy_units_seen_and_alive"]
-    })
-    pruned.update({
-        k: prune_dict_of_dicts(original_state[k], current_iteration)
-        for k in ["buildings_constructed", "units_built"]
-    })
+    pruned.update(
+        {
+            k: prune_dict_of_units(original_state[k], current_iteration)
+            for k in ["player_buildings", "player_units", "enemy_units_seen_and_alive"]
+        }
+    )
+    pruned.update(
+        {
+            k: prune_dict_of_dicts(original_state[k], current_iteration)
+            for k in ["buildings_constructed", "units_built"]
+        }
+    )
     return pruned
 
 
-#todo i think add building tracking as well, seperate from the regular unit tracking
+# todo i think add building tracking as well, seperate from the regular unit tracking
 
 
-#I intend to truncate units according to health. Hopefully this prioritizes highest impact units.
-#Input is dict of units
-#mode 1 for truncating enemy units. Which will also have the iteration timer thing.
-#mode 0 for everything else
+# I intend to truncate units according to health. Hopefully this prioritizes highest impact units.
+# Input is dict of units
+# mode 1 for truncating enemy units. Which will also have the iteration timer thing.
+# mode 0 for everything else
 def truncate_to_50(units, mode=0) -> list:
     # Step 1: Sort and truncate top 50 by health
     if mode == 0:
-        sorted_units = sorted(units.values(), key=lambda x: x["health"], reverse=True)[:50]
+        sorted_units = sorted(units.values(), key=lambda x: x["health"], reverse=True)[
+            :50
+        ]
     else:
         sorted_units = sorted(units.values(), key=lambda x: x["last_seen"])[:50]
 
@@ -101,6 +139,7 @@ def truncate_to_50(units, mode=0) -> list:
     final = [int(x) for x in final]
     return final
 
+
 # existing = {}
 # for i in prune_state(data[str(0)])["player_army"]:
 #     unit_type = prune_state(data[str(0)])["player_army"][i]["unit_type"]
@@ -111,16 +150,36 @@ def truncate_to_50(units, mode=0) -> list:
 #
 # print(existing)
 
-def compress_pruned(pruned:dict) -> dict:
-    compressed = {k: pruned[k] for k in
-                ["iteration", "player_pov", "own_spawn_x", "own_spawn_y", "enemy_spawn_x", "enemy_spawn_y", "own_race",
-                 "enemy_race", "supply_army", "supply_workers", "supply_used", "supply_left", "supply_cap",
-                 "workers_built", "army_built", "minerals", "gas", "visibility", "under_construction"]}
 
-    compressed.update({
-        k: truncate_to_50(pruned[k])
-        for k in ["player_buildings", "player_units"]
-    })
+def compress_pruned(pruned: dict) -> dict:
+    compressed = {
+        k: pruned[k]
+        for k in [
+            "iteration",
+            "player_pov",
+            "own_spawn_x",
+            "own_spawn_y",
+            "enemy_spawn_x",
+            "enemy_spawn_y",
+            "own_race",
+            "enemy_race",
+            "supply_army",
+            "supply_workers",
+            "supply_used",
+            "supply_left",
+            "supply_cap",
+            "workers_built",
+            "army_built",
+            "minerals",
+            "gas",
+            "visibility",
+            "under_construction",
+        ]
+    }
+
+    compressed.update(
+        {k: truncate_to_50(pruned[k]) for k in ["player_buildings", "player_units"]}
+    )
 
     enemy_structures = {}
     enemy_units = {}
@@ -144,14 +203,17 @@ def compress_pruned(pruned:dict) -> dict:
     #     k: truncate_to_50(pruned[k], 1)
     #     for k in ["enemy_units_seen_and_alive"]
     # })
-    compressed.update({
-        k: {
-            outer_key: truncate_to_50(inner_dict)
-            for outer_key, inner_dict in pruned[k].items()
+    compressed.update(
+        {
+            k: {
+                outer_key: truncate_to_50(inner_dict)
+                for outer_key, inner_dict in pruned[k].items()
+            }
+            for k in ["buildings_constructed", "units_built"]
         }
-        for k in ["buildings_constructed", "units_built"]
-    })
+    )
     return compressed
+
 
 print(len(data))
 print(data.keys())
@@ -164,4 +226,4 @@ print("next")
 enemies = data[str(7)]["enemy_units_seen_and_alive"]
 for i in enemies.keys():
     print(enemies[i]["unit_type"])
-#for some reason when probe saw natural hatch he saw main hatch too???? What the fuxck
+# for some reason when probe saw natural hatch he saw main hatch too???? What the fuxck

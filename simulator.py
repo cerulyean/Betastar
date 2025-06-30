@@ -1,8 +1,8 @@
 import json
 import os
+import sys
 import platform
-import time
-from datetime import datetime
+import gzip
 from pathlib import Path
 from typing import List, Dict, TypedDict
 
@@ -17,11 +17,9 @@ from sc2.ids.unit_typeid import UnitTypeId
 from sc2.ids.upgrade_id import UpgradeId
 from sc2.main import run_replay
 from sc2.observer_ai import ObserverAI
-
-from models import UnitLifetime, UnitPosition
 from sc2.unit import Unit
 
-import gzip
+from models import UnitLifetime, UnitPosition
 
 MAX_GRID_SIZE = 182
 NUMBER_OF_GRIDS = 20
@@ -578,7 +576,6 @@ class CustomEncoder(json.JSONEncoder):
             )
         return super().default(obj)
 
-
 # e.g. replay_name = "tests/replays/Alcyone LE (6).SC2Replay"
 # e.g. output_name = "output.json.gz"
 # 224 step size is 10s
@@ -592,48 +589,20 @@ def extract_data(replay_name: str, output_name: str, fow_pov, step_size: int = 2
 
     return data
 
-
-def process_folder(input_folder="1000 replays", output_folder="1000 extracts"):
-    #extract only zvp games
-    with open("data.json", "r") as f:
-        detailed_info = json.load(f)
-    t0 = time.time()
-    count = 0
-    os.makedirs(output_folder, exist_ok=True)
-    folder_path = input_folder
-    for filename in os.listdir(folder_path):
-        id = filename.removesuffix(".SC2Replay")
-        if detailed_info[id]["zerg"] != True or detailed_info[id]["protoss"] != True:
-            continue
-        print("count number: " + str(count))
-        print(filename)
-        file_path = os.path.join(folder_path, filename)
-        output_path = os.path.join(output_folder, filename)
-        output_path_p1 = output_path + "_p1.json.gz"
-        output_path_p2 = output_path + "_p2.json.gz"
-
-        if os.path.exists(output_path_p1) and os.path.exists(output_path_p2):
-            print("skipped")
-            continue
-        if os.path.isfile(file_path):
-            extract_data(file_path, output_name=output_path_p1, fow_pov=1)
-            extract_data(file_path, output_name=output_path_p2, fow_pov=2)
-        elapsed = time.time() - t0
-        minutes, seconds = divmod(int(elapsed), 60)
-        hours, minutes = divmod(minutes, 60)
-        print(f"{hours}h {minutes}m {seconds}s")
-        print(datetime.now().strftime("%H:%M:%S"))  # 24-hour time
-        count += 1
-        return
-
-
 if __name__ == "__main__":
     # print("hi")
     # simulator = ReplaySimulator("1000 replays/26382815.SC2Replay", fow_pov=1, step_size=224)
     # simulator.run_simulation()
     # pixelmap_x_length, pixelmap_y_length = simulator.observer.state.visibility.data_numpy.shape
-    extract_data("tests/replays/Alcyone LE (6).SC2Replay", "output.json.gz", 1)
+    # extract_data("tests/replays/Alcyone LE (7).SC2Replay", "output.json.gz", 1)
 
+    assert len(sys.argv) == 5, "Usage: python simulator.py replay_path output_path fow_pov step_size"
+
+    replay_path = sys.argv[1]
+    output_path = sys.argv[2]
+    fow_pov = int(sys.argv[3])
+    step_size = int(sys.argv[4])
+    extract_data(replay_path, output_path, fow_pov, step_size)
 
 # todo I need to make sure the vision things are correct. Must test. I dont understand why they are different
 # in test scouting one building scouted other buildings. Must see if happens alot

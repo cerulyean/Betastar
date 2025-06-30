@@ -1,3 +1,5 @@
+# Usage: python batch_processor.py --max-procs 4
+
 import argparse, json, os, subprocess, time
 from datetime import datetime
 

@@ -594,8 +594,8 @@ def extract_data(replay_name: str, output_name: str, fow_pov, step_size: int = 2
 
 
 def process_folder(input_folder="1000 replays", output_folder="1000 extracts"):
-    # extract only zvp games
-    with open("D:/betastar/parser/data.json", "r") as f:
+    #extract only zvp games
+    with open("data.json", "r") as f:
         detailed_info = json.load(f)
     t0 = time.time()
     count = 0

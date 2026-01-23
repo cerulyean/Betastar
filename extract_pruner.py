@@ -10,16 +10,11 @@ from numpy.ma.extras import compress_rows
 # with gzip.open('1000 extracts/26382813.SC2Replay_p1.json.gz', 'rt', encoding='utf-8') as f:
 #     data = json.load(f)
 
-with gzip.open(
-    "1000 extracts/26382815.SC2Replay_p1.json.gz", "rt", encoding="utf-8"
-) as f:
-    data = json.load(f)
-
 
 def prune_unit_data(original_unit, current_state_iteration):
     pruned = {
         k: original_unit[k]
-        for k in ["tag", "unit_type", "health", "shield", "energy", "is_structure"]
+        for k in ["unit_type", "health", "shield", "energy", "is_structure"]
     }
     pruned["last_seen_x"], pruned["last_seen_y"] = (
         original_unit["last_seen_position"][0],
@@ -31,22 +26,24 @@ def prune_unit_data(original_unit, current_state_iteration):
     return pruned
 
 
-def prune_visiblity(visibility):
-    compressed = [
-        [-1 for _ in range((len(visibility[0]) + 9) // 10)]
-        for _ in range((len(visibility) + 9) // 10)
-    ]
+def prune_visibility(visibility, block_size=10):
+    h = (len(visibility) + block_size - 1) // block_size
+    w = (len(visibility[0]) + block_size - 1) // block_size
 
-    for i, row in enumerate(visibility):
-        for j, val in enumerate(row):
-            if val == 2:
-                compressed[i // 10][j // 10] = 2
-            if val == 1:
-                compressed[i // 10][j // 10] = 1
-            if val == 0:
-                compressed[i // 10][j // 10] = 0
-            if val == -1:
-                compressed[i // 10][j // 10] = -1
+    compressed = [[-1 for _ in range(w)] for _ in range(h)]
+
+    # fairly low resolution. The entire sum is the maximum value of all of the grids.
+    for bi in range(h):
+        for bj in range(w):
+            block_max = -1
+            for i in range(
+                bi * block_size, min((bi + 1) * block_size, len(visibility))
+            ):
+                for j in range(
+                    bj * block_size, min((bj + 1) * block_size, len(visibility[0]))
+                ):
+                    block_max = max(block_max, visibility[i][j])
+            compressed[bi][bj] = block_max
 
     return compressed
 
@@ -89,25 +86,27 @@ def prune_state(original_state: dict) -> dict:
             "minerals",
             "gas",
             "under_construction",
+            "newly_queued",
         ]
     }
-    pruned["visibility"] = prune_visiblity(original_state["visibility"])
+    pruned["visibility"] = prune_visibility(original_state["visibility"])
     pruned.update(
         {
             k: prune_dict_of_units(original_state[k], current_iteration)
-            for k in ["player_buildings", "player_units", "enemy_units_seen_and_alive"]
+            for k in ["player_units", "enemy_units_seen_and_alive"]
         }
     )
-    pruned.update(
-        {
-            k: prune_dict_of_dicts(original_state[k], current_iteration)
-            for k in ["buildings_constructed", "units_built"]
-        }
-    )
+    # pruned.update(
+    #     {
+    #         k: prune_dict_of_dicts(original_state[k], current_iteration)
+    #         for k in ["units_built"]
+    #     }
+    # )
     return pruned
 
 
 # todo i think add building tracking as well, seperate from the regular unit tracking
+# Done i think
 
 
 # I intend to truncate units according to health. Hopefully this prioritizes highest impact units.
@@ -121,6 +120,7 @@ def truncate_to_50(units, mode=0) -> list:
             :50
         ]
     else:
+
         sorted_units = sorted(units.values(), key=lambda x: x["last_seen"])[:50]
 
     # Step 2: Convert dicts to flat lists (same key order assumed)
@@ -128,9 +128,9 @@ def truncate_to_50(units, mode=0) -> list:
 
     # Step 3: Pad to 50 if needed
     if mode == 0:
-        feature_len = 8
+        feature_len = 7
     else:
-        feature_len = 9
+        feature_len = 8
     padding_unit = [-1] * feature_len
     while len(unit_vectors) < 50:
         unit_vectors.append(padding_unit)
@@ -177,19 +177,35 @@ def compress_pruned(pruned: dict) -> dict:
         ]
     }
 
-    compressed.update(
-        {k: truncate_to_50(pruned[k]) for k in ["player_buildings", "player_units"]}
-    )
+    player_units = {}
+    player_structures = {}
+
+    for tag, unit in pruned["player_units"].items():
+        if unit["is_structure"]:
+            player_structures[tag] = unit
+        else:
+            player_units[tag] = unit
+
+    compressed["player_units"] = truncate_to_50(player_units)
+    compressed["player_structures"] = truncate_to_50(player_structures)
 
     enemy_structures = {}
     enemy_units = {}
 
+    # removed because i remove tag from units
+    # enemy = pruned["enemy_units_seen_and_alive"]
+    # for l in enemy:
+    #     if enemy[l]["is_structure"]:
+    #         enemy_structures[enemy[l]["tag"]] = enemy[l]
+    #     else:
+    #         enemy_units[enemy[l]["tag"]] = enemy[l]
+
     enemy = pruned["enemy_units_seen_and_alive"]
-    for l in enemy:
-        if enemy[l]["is_structure"]:
-            enemy_structures[enemy[l]["tag"]] = enemy[l]
+    for tag, unit in enemy.items():
+        if unit["is_structure"]:
+            enemy_structures[tag] = unit
         else:
-            enemy_units[enemy[l]["tag"]] = enemy[l]
+            enemy_units[tag] = unit
 
     print(len(enemy_units))
     print(len(enemy_structures))
@@ -198,32 +214,12 @@ def compress_pruned(pruned: dict) -> dict:
     enemy_units = truncate_to_50(enemy_units, 1)
     compressed["enemy_structures"] = enemy_structures
     compressed["enemy_units"] = enemy_units
-
-    # compressed.update({
-    #     k: truncate_to_50(pruned[k], 1)
-    #     for k in ["enemy_units_seen_and_alive"]
-    # })
-    compressed.update(
-        {
-            k: {
-                outer_key: truncate_to_50(inner_dict)
-                for outer_key, inner_dict in pruned[k].items()
-            }
-            for k in ["buildings_constructed", "units_built"]
-        }
-    )
     return compressed
 
 
-print(len(data))
-print(data.keys())
-print(compress_pruned(prune_state(data[str(14)]))["enemy_structures"])
-# pruned = prune_state(data[str(0)]).keys()
-# print(pruned)
-# print(truncate_to_50(prune_state(data[str(0)])["player_army"]))
-# print(data[str(0)].keys())
-print("next")
-enemies = data[str(7)]["enemy_units_seen_and_alive"]
-for i in enemies.keys():
-    print(enemies[i]["unit_type"])
-# for some reason when probe saw natural hatch he saw main hatch too???? What the fuxck
+with gzip.open(
+    "1000 extracts/26382815.SC2Replay_1.json.gz", "rt", encoding="utf-8"
+) as f:
+    data = json.load(f)
+print(compress_pruned(prune_state(data[str(6)])).keys())
+print(compress_pruned(prune_state(data[str(6)]))["player_units"])

@@ -1,12 +1,16 @@
+import gc
 import json
 import os
 import sys
 import platform
 import gzip
+from collections import defaultdict
 from pathlib import Path
 from typing import List, Dict, TypedDict
+from pympler import muppy, summary, asizeof
 
 import numpy as np
+import psutil
 
 from constants import WORKERS, NOT_ARMY, VALID_UNITS
 from sc2.constants import CREATION_ABILITY_FIX
@@ -27,15 +31,27 @@ SIZE_OF_GRID = MAX_GRID_SIZE / NUMBER_OF_GRIDS
 NUM_PREDICTED_STEPS = 2
 
 
+def print_memory_usage():
+    process = psutil.Process(os.getpid())
+    mem_info = process.memory_info()
+    print(f"RSS: {mem_info.rss / 1024 ** 2:.2f} MB")  # Resident Set Size
+
+
+def get_unit_type(unit_name: str):
+    unit_name = unit_name.strip().upper()
+    for race, unit_set in VALID_UNITS.items():
+        for unit_type in unit_set:
+            if unit_type.name == unit_name:
+                return unit_type
+    return None
+
+
 class StepData(TypedDict):
     iteration: int
     visibility: List
     enemy_units_seen_and_alive: Dict[int, Dict]
     player_pov: int
-    buildings_constructed: Dict[int, Dict[int, Dict]]
-    player_buildings: Dict[int, Dict]
     player_units: Dict[int, Dict]
-    units_built: Dict[int, Dict[int, Dict]]
     workers_built: int
     army_built: int
     supply_cap: int
@@ -52,24 +68,31 @@ class StepData(TypedDict):
     minerals: int
     gas: int
     under_construction: Dict[int, int]
+    newly_queued: Dict[int, int]
 
 
+# todo include compressed data on units/buildings constructed in past step block into a single output
 def compress_step_block(steps: List[StepData]) -> StepData:
     base = steps[-1].copy()  # Use the latest frame as a base
 
     # Aggregate scalar values
     base["workers_built"] = sum(s["workers_built"] for s in steps)
     base["army_built"] = sum(s["army_built"] for s in steps)
+    accum = defaultdict(int)
+    for s in steps:
+        for k, v in s["newly_queued"].items():
+            accum[k] += v
+    base["newly_queued"] = dict(accum)
+
+    accum = defaultdict(int)
+    for s in steps:
+        for k, v in s["under_construction"].items():
+            accum[k] += v
+    base["under_construction"] = dict(accum)
 
     # Optionally average or use max of supply/minerals if desired
     base["minerals"] = max(s["minerals"] for s in steps)
     base["gas"] = max(s["gas"] for s in steps)
-
-    # Merge units_built
-    base["units_built"] = merge_nested_dicts(s["units_built"] for s in steps)
-    base["buildings_constructed"] = merge_nested_dicts(
-        s["buildings_constructed"] for s in steps
-    )
 
     # Merge enemy_units_seen_and_alive by updating to latest sighting
     enemy_units = {}
@@ -80,41 +103,14 @@ def compress_step_block(steps: List[StepData]) -> StepData:
     return base
 
 
-def merge_nested_dicts(dicts):
-    out = {}
-    for d in dicts:
-        for k, v in d.items():
-            if k not in out:
-                out[k] = v
-            else:
-                out[k].update(v)
-    return out
-
-
 def extract_unit_details(unit: Unit):
     return {
         "tag": unit.tag,
         "last_seen_position": unit.position,
         "unit_type": unit.type_id,
         "is_structure": unit.is_structure,
-        "is_light": unit.is_light,
-        "is_armored": unit.is_armored,
-        "is_biological": unit.is_biological,
-        "is_technical": unit.is_mechanical,
-        "is_massive": unit.is_massive,
-        "is_psionic": unit.is_psionic,
-        "can_attack": unit.can_attack,
-        "can_attack_both": unit.can_attack_both,
-        "can_attack_ground": unit.can_attack_ground,
-        "ground_dps": unit.ground_dps,
-        "ground_range": unit.ground_range,
-        "can_attack_air": unit.can_attack_air,
-        "air_dps": unit.air_dps,
-        "air_range": unit.air_range,
-        "bonus_damage": unit.bonus_damage,
         "armor": unit.armor,
         "movement_speed": unit.movement_speed,
-        "real_speed": unit.real_speed,
         "health_max": unit.health_max,
         "health": unit.health,
         "shield_max": unit.shield_max,
@@ -131,35 +127,34 @@ class _ObservationAggregator(ObserverAI):
     from replays
     """
 
-    def __init__(self, step_size: int, player_pov=0):
+    def __init__(
+        self,
+        step_size: int,
+        save_name: str,
+        player_pov: int = 0,
+        save_interval: int = 100,
+    ):
         self.recent_steps = []
         self.iteration: int = 0
         self.step_size = step_size
-        self.lifetimes = dict()
         self.number_of_units = dict()
         self.visibility = np.ndarray
-
-        self.buildings_constructed: Dict[int, Dict[int, Dict]] = {0: {}, 1: {}, 2: {}}
-        self.new_buildings: Dict[int, Dict] = {}
-        self.player_buildings: Dict[int, Unit] = {}
-        self.prev_player_buildings: Dict[int, Unit] = {}
 
         self.enemy_units_seen_and_alive: Dict[int, Dict] = {}
 
         self.player_units: Dict[int, Dict] = {}
         self.prev_player_units = {}
-        self.new_units = {}
-        self.units_built: Dict[int, Dict[int, Dict]] = {0: {}, 1: {}, 2: {}}
-        self.units2: Dict[int, Unit] = {}
+        self.newly_queued = {unit.value: 0 for unit in VALID_UNITS[Race.Zerg]}
 
         self.player_pov: int = player_pov
         self.workers_built = 0
         self.army_built = 0
-        self.data = {}
         self.final_data = {}
-        self.newly_queued = {unit.value: 0 for unit in VALID_UNITS[Race.Zerg]}
+        self.under_construction = {unit.value: 0 for unit in VALID_UNITS[Race.Zerg]}
 
-        self.seen: Dict[int:bool] = {}
+        self.save_interval = save_interval
+        self.save_name = save_name
+        self.block_index = 0
 
     def _other(self, x: int = -1) -> int:
         if x == -1:
@@ -178,10 +173,6 @@ class _ObservationAggregator(ObserverAI):
         """Override this in your bot class. This function is called when a unit is created.
 
         :param unit:"""
-        if unit.is_structure and unit.owner_id == self.player_pov:
-            self.new_buildings[unit.tag] = extract_unit_details(unit)
-        if not unit.is_structure and unit.owner_id == self.player_pov:
-            self.new_units[unit.tag] = extract_unit_details(unit)
 
     async def on_enemy_unit_entered_vision(self, unit: Unit) -> None:
         """
@@ -192,9 +183,6 @@ class _ObservationAggregator(ObserverAI):
         details = extract_unit_details(unit)
         details["last_seen"] = self.iteration
         self.enemy_units_seen_and_alive[unit.tag] = details
-        self.units2[unit.tag] = unit
-        if unit.tag not in self.seen:
-            self.seen[unit.tag] = True
 
     async def on_unit_destroyed(self, unit_tag):
         """
@@ -210,9 +198,6 @@ class _ObservationAggregator(ObserverAI):
         if self.player_units.get(unit_tag) is not None:
             del self.player_units[unit_tag]
 
-        if self.player_buildings.get(unit_tag) is not None:
-            del self.player_buildings[unit_tag]
-
     async def on_building_construction_started(self, unit: Unit):
         """
         Override this in your bot class.
@@ -220,6 +205,35 @@ class _ObservationAggregator(ObserverAI):
 
         :param unit:
         """
+
+    async def on_unit_type_changed(self, unit: Unit, previous_type: UnitTypeId) -> None:
+        """Override this in your bot class. This function is called when a unit type has changed. To get the current UnitTypeId of the unit, use 'unit.type_id'
+
+        This may happen when a larva morphed to an egg, siege tank sieged, a zerg unit burrowed, a hatchery morphed to lair,
+        a corruptor morphed to broodlordcocoon, etc..
+
+        Examples::
+
+            print(f"My unit changed type: {unit} from {previous_type} to {unit.type_id}")
+
+        :param unit:
+        :param previous_type:
+        """
+        # newly_queued is used to track what type freshly enters queue
+        if unit.orders:
+            if (
+                get_unit_type(unit.orders[0].ability.button_name)
+                in VALID_UNITS[Race.Zerg]
+                and previous_type in VALID_UNITS[Race.Zerg]
+            ):
+                self.newly_queued[
+                    get_unit_type(unit.orders[0].ability.button_name).value
+                ] += 1
+        else:
+            if unit.type_id == UnitTypeId.LAIR:
+                print("hi")
+            if unit.type_id in VALID_UNITS[Race.Zerg]:
+                self.newly_queued[unit.type_id.value] += 1
 
     def already_pending_upgrade(self, upgrade_type: UpgradeId) -> float:
         """Check if an upgrade is being researched
@@ -247,6 +261,9 @@ class _ObservationAggregator(ObserverAI):
                 if order.ability.exact_id == creationAbilityID:
                     return order.progress
         return 0
+
+    # TODO Track this^
+    # actually already_pending tracks this. So im not sure. Maybe can remove
 
     def already_pending(self, unit_type: UpgradeId | UnitTypeId) -> float:
         """
@@ -276,17 +293,20 @@ class _ObservationAggregator(ObserverAI):
                         ]
                         / 2
                     )
-                # Hotfix for rich geysirs
+                # Hotfix for rich geysers
                 return self._abilities_count_and_build_progress[0][
                     CREATION_ABILITY_FIX[unit_type]
                 ]
             return 0
         return self._abilities_count_and_build_progress[0][ability]
 
-    # testing to see if overriding breaks anything
-    # ok it doesnt. observer ai overrides this supposedly final method with some other garbage that broke support for
-    # supply_army and supply_workers. I put them back so i can use them for tracking total worker count and total
-    # army count
+    def save_data(self, output_name):
+        data = self.final_data
+        with gzip.open(output_name + ".json.gz", "wt", encoding="utf-8") as f:
+            json.dump(data, f, cls=CustomEncoder)
+            f.flush()
+            gc.collect()
+
     def _prepare_step(self, state, proto_game_info):
         """
         :param state:
@@ -314,23 +334,11 @@ class _ObservationAggregator(ObserverAI):
         self._prepare_units()
 
     async def on_step(self, iteration: int):
+
         # TODO: Only basic information is included for now, need to add more
         # stuff to aggregate later on
-        self.new_buildings = {}
-        self.new_units = {}
-        self.workers_built = 0
-        self.army_built = 0
+
         self.iteration = iteration
-        # Add Unit lifetime data
-        for i in range(len(self.units)):
-            unit = self.units[i]
-            position = UnitPosition(unit.game_loop, unit.position[0], unit.position[1])
-            if unit.tag not in self.lifetimes:
-                self.lifetimes[unit.tag] = UnitLifetime(
-                    unit.tag, unit.owner_id, unit.name, [position], False, -1
-                )
-            else:
-                self.lifetimes[unit.tag].positions.append(position)
 
         # Initialize the full-sized visibility map with -1
         self.visibility = np.full((256, 256), -1, dtype=int)
@@ -344,8 +352,6 @@ class _ObservationAggregator(ObserverAI):
         # Counts unit number
         self.number_of_units[iteration] = self.all_units.amount
 
-        self.prev_player_buildings = self.player_buildings.copy()
-
         self.prev_player_units = self.player_units.copy()
 
         # Tracking what enemy units detected
@@ -354,61 +360,16 @@ class _ObservationAggregator(ObserverAI):
                 details = extract_unit_details(unit)
                 details["last_seen"] = iteration
                 self.enemy_units_seen_and_alive[unit.tag] = details
-                self.units2[unit.tag] = unit
             # Tracking what new units are made + adding to army
             if unit.owner_id == self.player_pov and not unit.is_structure:
                 if unit.tag not in self.player_units:
-                    # self.new_units.append(unit)
-                    self.new_units[unit.tag] = extract_unit_details(unit)
-                    self.units2[unit.tag] = unit
                     if unit.type_id in WORKERS:
                         self.workers_built += 1
                     # TODO i think update this to use supply instead. But i cant find where they keep supply cost for
-                    # unit
                     if unit.type_id not in NOT_ARMY:
                         self.army_built += 1
                 details = extract_unit_details(unit)
                 self.player_units[unit.tag] = details
-                self.units2[unit.tag] = unit
-
-            # tracking total structures + new structures
-            if unit.owner_id == self.player_pov and unit.is_structure:
-                if unit.tag not in self.player_buildings:
-                    # self.new_buildings.append(unit)
-                    self.new_buildings[unit.tag] = extract_unit_details(unit)
-                    self.units2[unit.tag] = unit
-                self.player_buildings[unit.tag] = unit
-                self.units2[unit.tag] = unit
-
-        # Tracking unit morphs
-        for tag in self.player_units:
-            unit = self.units2[tag]
-            if (
-                tag in self.prev_player_units
-                and self.prev_player_units[tag]["unit_type"] != unit.type_id
-            ):
-                # self.new_units.append(unit)
-                self.new_units[tag] = extract_unit_details(unit)
-                self.units2[unit.tag] = unit
-
-        # tracking building morphs
-        for tag in self.player_buildings:
-            building = self.player_buildings[tag]
-            if (
-                tag in self.prev_player_buildings
-                and self.prev_player_buildings[tag].name != building.name
-            ):
-                # self.new_buildings.append(building)
-                self.new_buildings[tag] = extract_unit_details(building)
-                self.units2[building.tag] = building
-
-        self.buildings_constructed[2] = self.buildings_constructed[1].copy()
-        self.buildings_constructed[1] = self.buildings_constructed[0].copy()
-        self.buildings_constructed[0] = self.new_buildings
-
-        self.units_built[2] = self.units_built[1]
-        self.units_built[1] = self.units_built[0]
-        self.units_built[0] = self.new_units
 
         x_off, y_off, w, h = self.game_info.playable_area
         # Scale minimap [0–64] → playable area [x_off:x_off+w, y_off:y_off+h]
@@ -416,28 +377,19 @@ class _ObservationAggregator(ObserverAI):
         py = int(self.start_location.y / 64 * h) + y_off
 
         ex = int(self.enemy_start_locations[0].x / 64 * w) + x_off
-        ey = int(self.enemy_start_locations[0].y / 64 * w) + x_off
-
-        # todo make this exclude non army units
-        # player_army =
+        ey = int(self.enemy_start_locations[0].y / 64 * w) + y_off
 
         # make buildings and units that recently started construction, not ending construction
         for unit in VALID_UNITS[Race.Zerg]:
             id = unit.value
-            self.newly_queued[id] = int(self.already_pending(unit))
+            self.under_construction[id] = int(self.already_pending(unit))
 
-        self.data[iteration]: StepData = {
+        one_step: StepData = {
             "iteration": iteration,
             "visibility": self.visibility.tolist(),
             "enemy_units_seen_and_alive": self.enemy_units_seen_and_alive.copy(),
             "player_pov": self.player_pov,
-            "buildings_constructed": self.buildings_constructed,
-            "player_buildings": {
-                x: extract_unit_details(self.player_buildings[x])
-                for x in self.player_buildings
-            },
             "player_units": self.player_units.copy(),
-            "units_built": self.units_built,
             "workers_built": self.workers_built,
             "army_built": self.army_built,
             "supply_cap": self.supply_cap,
@@ -453,16 +405,57 @@ class _ObservationAggregator(ObserverAI):
             "enemy_spawn_y": ey,
             "minerals": self.minerals,
             "gas": self.vespene,
-            "under_construction": self.newly_queued.copy(),
+            "under_construction": self.under_construction.copy(),
+            "newly_queued": self.newly_queued.copy(),
         }
 
         self.recent_steps = getattr(self, "recent_steps", [])
-        self.recent_steps.append(self.data[iteration])
+        self.recent_steps.append(one_step)
 
         if len(self.recent_steps) == 10:
             compressed = compress_step_block(self.recent_steps)
-            self.final_data[iteration // 10] = compressed
+            self.final_data[self.block_index] = compressed
+            self.block_index += 1
             self.recent_steps.clear()
+
+        if iteration % self.save_interval == 0:
+            all_objects = muppy.get_objects()
+            sum1 = summary.summarize(all_objects)
+            summary.print_(sum1)
+            save_number = iteration // self.save_interval
+            save_name = self.save_name + "_" + str(save_number)
+            self.save_data(save_name)
+
+            if self.block_index > 0:
+                first_step = self.final_data[self.block_index - 1]
+                self.final_data.clear()
+                self.final_data[0] = first_step
+                self.block_index = 1
+            else:
+                # Nothing to preserve, just clear
+                self.final_data.clear()
+                self.block_index = 0
+
+            self.visibility = []
+            print("data_cleared")
+            if not self.iteration == 0:
+                print("Memory usage by component:")
+                print("player_units:", asizeof.asizeof(self.player_units))
+                print(
+                    "enemy_units_seen_and_alive:",
+                    asizeof.asizeof(self.enemy_units_seen_and_alive),
+                )
+                print("recent_steps:", asizeof.asizeof(self.recent_steps))
+                print("final_data:", asizeof.asizeof(self.final_data))
+                print("visibility:", asizeof.asizeof(self.visibility))
+            if self.time > 600.0:
+                await self.client.leave()
+                return
+        print_memory_usage()
+        self.newly_queued = {unit.value: 0 for unit in VALID_UNITS[Race.Zerg]}
+        self.under_construction = {unit.value: 0 for unit in VALID_UNITS[Race.Zerg]}
+        self.workers_built = 0
+        self.army_built = 0
 
 
 class ReplaySimulator:
@@ -479,7 +472,9 @@ class ReplaySimulator:
         print(lifetimes)
     """
 
-    def __init__(self, path: str, step_size: int = 22, fow_pov: int = 0):
+    def __init__(
+        self, path: str, save_name: str, step_size: int = 10, fow_pov: int = 0
+    ):
         """
         :param path: Relative or absolute path of replay
         :param step_size: Number of gameloops to skip before collecting observation data.
@@ -490,7 +485,9 @@ class ReplaySimulator:
         """
         replay_path = self._validate_path(path)
         self.replay_path = replay_path
-        self.observer = _ObservationAggregator(step_size, fow_pov)
+        self.observer = _ObservationAggregator(
+            step_size, save_name=save_name, player_pov=fow_pov
+        )
         self.completed_simulation = False
         self.fow_pov = fow_pov
 
@@ -523,12 +520,6 @@ class ReplaySimulator:
         )
         self.completed_simulation = True
 
-    def get_unit_lifetimes(self) -> List[UnitLifetime]:
-        assert (
-            self.completed_simulation
-        ), "Call simulator.run_simulation() before using this function!"
-        return self.observer.lifetimes
-
     def get_visibility_map(self):
         assert (
             self.completed_simulation
@@ -540,12 +531,6 @@ class ReplaySimulator:
             self.completed_simulation
         ), "Call simulator.run_simulation() before using this function!"
         return self.observer.number_of_units
-
-    def get_data(self):
-        assert (
-            self.completed_simulation
-        ), "Call simulator.run_simulation() before using this function!"
-        return self.observer.data
 
     def get_final_data(self):
         assert (
@@ -576,18 +561,18 @@ class CustomEncoder(json.JSONEncoder):
             )
         return super().default(obj)
 
+
 # e.g. replay_name = "tests/replays/Alcyone LE (6).SC2Replay"
 # e.g. output_name = "output.json.gz"
 # 224 step size is 10s
-def extract_data(replay_name: str, output_name: str, fow_pov, step_size: int = 22):
-    simulator = ReplaySimulator(replay_name, fow_pov=fow_pov, step_size=step_size)
+def extract_data(replay_name: str, output_name: str, fow_pov, step_size: int = 11):
+    simulator = ReplaySimulator(
+        replay_name, output_name, fow_pov=fow_pov, step_size=step_size
+    )
     simulator.run_simulation()
     data = simulator.get_final_data()
-
-    with gzip.open(output_name, "wt", encoding="utf-8") as f:
-        json.dump(data, f, cls=CustomEncoder)
-
     return data
+
 
 if __name__ == "__main__":
     # print("hi")
@@ -596,13 +581,21 @@ if __name__ == "__main__":
     # pixelmap_x_length, pixelmap_y_length = simulator.observer.state.visibility.data_numpy.shape
     # extract_data("tests/replays/Alcyone LE (7).SC2Replay", "output.json.gz", 1)
 
-    assert len(sys.argv) == 5, "Usage: python simulator.py replay_path output_path fow_pov step_size"
-
-    replay_path = sys.argv[1]
-    output_path = sys.argv[2]
-    fow_pov = int(sys.argv[3])
-    step_size = int(sys.argv[4])
-    extract_data(replay_path, output_path, fow_pov, step_size)
-
-# todo I need to make sure the vision things are correct. Must test. I dont understand why they are different
-# in test scouting one building scouted other buildings. Must see if happens alot
+    if len(sys.argv) == 5:
+        assert (
+            len(sys.argv) == 5
+        ), "Usage: python simulator.py replay_path output_path fow_pov step_size"
+        replay_path = sys.argv[1]
+        output_path = sys.argv[2]
+        fow_pov = int(sys.argv[3])
+        step_size = int(sys.argv[4])
+        extract_data(replay_path, output_path, fow_pov, step_size)
+    else:
+        simulator = ReplaySimulator(
+            # "tests/replays/Alcyone LE (6).SC2Replay",
+            "1000 replays/26382815.SC2Replay",
+            save_name="1000 extracts/26382815.SC2Replay",
+            fow_pov=2,
+            step_size=20,
+        )
+        simulator.run_simulation()

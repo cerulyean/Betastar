@@ -52,10 +52,10 @@ class ObserverAI(BotAIInternal):
         self.reactor_tags: Set[int] = set()
         self.minerals: int = None
         self.vespene: int = None
-        #This was what the guy did, modifying to see if it does anything
-        #self.supply_army: Union[float, int] = None
+        # This was what the guy did, modifying to see if it does anything
+        # self.supply_army: Union[float, int] = None
         # Doesn't include workers in production
-        #self.supply_workers: Union[float, int] = None
+        # self.supply_workers: Union[float, int] = None
         self.supply_army: float = 0
         self.supply_workers: float = 12
         self.supply_cap: Union[float, int] = None
@@ -76,12 +76,12 @@ class ObserverAI(BotAIInternal):
 
     @property
     def time(self) -> float:
-        """ Returns time in seconds, assumes the game is played on 'faster' """
+        """Returns time in seconds, assumes the game is played on 'faster'"""
         return self.state.game_loop / 22.4  # / (1/1.4) * (1/16)
 
     @property
     def time_formatted(self) -> str:
-        """ Returns time as string in min:sec format """
+        """Returns time as string in min:sec format"""
         t = self.time
         return f"{int(t // 60):02}:{int(t % 60):02}"
 
@@ -140,7 +140,9 @@ class ObserverAI(BotAIInternal):
         return self.game_info.start_locations
 
     async def get_available_abilities(
-        self, units: Union[List[Unit], Units], ignore_resource_requirements: bool = False
+        self,
+        units: Union[List[Unit], Units],
+        ignore_resource_requirements: bool = False,
     ) -> List[List[AbilityId]]:
         """Returns available abilities of one or more units. Right now only checks cooldown, energy cost, and whether the ability has been researched.
 
@@ -154,7 +156,9 @@ class ObserverAI(BotAIInternal):
 
         :param units:
         :param ignore_resource_requirements:"""
-        return await self.client.query_available_abilities(units, ignore_resource_requirements)
+        return await self.client.query_available_abilities(
+            units, ignore_resource_requirements
+        )
 
     @property_cache_once_per_frame
     def _abilities_all_units(self) -> Counter:
@@ -168,11 +172,21 @@ class ObserverAI(BotAIInternal):
                 if self.race != Race.Terran or not unit.is_structure:
                     # If an SCV is constructing a building, already_pending would count this structure twice
                     # (once from the SCV order, and once from "not structure.is_ready")
-                    abilities_amount[self.game_data.units[unit.type_id.value].creation_ability] += 1
+                    abilities_amount[
+                        self.game_data.units[unit.type_id.value].creation_ability
+                    ] += 1
 
         return abilities_amount
 
-    def _prepare_start(self, client, player_id, game_info, game_data, realtime: bool = False, base_build: int = -1):
+    def _prepare_start(
+        self,
+        client,
+        player_id,
+        game_info,
+        game_data,
+        realtime: bool = False,
+        base_build: int = -1,
+    ):
         """
         Ran until game start to set game and player data.
 
@@ -190,13 +204,17 @@ class ObserverAI(BotAIInternal):
         self.base_build: int = base_build
         self.race: Race = Race(self.game_info.player_races[self.player_id])
         if len(self.game_info.player_races) == 2:
-            self.enemy_race: Race = Race(self.game_info.player_races[3 - self.player_id])
+            self.enemy_race: Race = Race(
+                self.game_info.player_races[3 - self.player_id]
+            )
 
     def _prepare_first_step(self):
         """First step extra preparations. Must not be called before _prepare_step."""
         if self.townhalls:
             self.game_info.player_start_location = self.townhalls.first.position
-        self.game_info.map_ramps, self.game_info.vision_blockers = self.game_info._find_ramps_and_vision_blockers()
+        self.game_info.map_ramps, self.game_info.vision_blockers = (
+            self.game_info._find_ramps_and_vision_blockers()
+        )
 
     def _prepare_step(self, state, proto_game_info):
         """
@@ -207,8 +225,12 @@ class ObserverAI(BotAIInternal):
         self.state: GameState = state  # See game_state.py
         # Required for events, needs to be before self.units are initialized so the old units are stored
         self._units_previous_map: Dict = {unit.tag: unit for unit in self.units}
-        self._structures_previous_map: Dict = {structure.tag: structure for structure in self.structures}
-        self._enemy_units_previous_map: dict[int, Unit] = {unit.tag: unit for unit in self.enemy_units}
+        self._structures_previous_map: Dict = {
+            structure.tag: structure for structure in self.structures
+        }
+        self._enemy_units_previous_map: dict[int, Unit] = {
+            unit.tag: unit for unit in self.enemy_units
+        }
         self._enemy_structures_previous_map: dict[int, Unit] = {
             structure.tag: structure for structure in self.enemy_structures
         }
@@ -258,7 +280,7 @@ class ObserverAI(BotAIInternal):
                         self.enemy_units.append(unit_obj)
 
     async def _after_step(self) -> int:
-        """ Executed by main.py after each on_step function. """
+        """Executed by main.py after each on_step function."""
         self.unit_tags_received_action.clear()
         # Commit debug queries
         await self.client._send_debug()
@@ -280,9 +302,17 @@ class ObserverAI(BotAIInternal):
 
     async def _issue_unit_added_events(self):
         for unit in self.units:
-            if unit.tag not in self._units_previous_map and unit.tag not in self._unit_tags_seen_this_game:
+            if (
+                unit.tag not in self._units_previous_map
+                and unit.tag not in self._unit_tags_seen_this_game
+            ):
                 self._unit_tags_seen_this_game.add(unit.tag)
                 await self.on_unit_created(unit)
+            elif unit.tag in self._units_previous_map:
+                previous_frame_unit: Unit = self._units_previous_map[unit.tag]
+                # Check if a unit type has changed
+                if previous_frame_unit.type_id != unit.type_id:
+                    await self.on_unit_type_changed(unit, previous_frame_unit.type_id)
 
     async def _issue_upgrade_events(self):
         difference = self.state.upgrades - self._previous_upgrades
@@ -293,9 +323,20 @@ class ObserverAI(BotAIInternal):
     async def _issue_building_events(self):
         for structure in self.structures:
             # Check build_progress < 1 to exclude starting townhall
-            if structure.tag not in self._structures_previous_map and structure.build_progress < 1:
+            if (
+                structure.tag not in self._structures_previous_map
+                and structure.build_progress < 1
+            ):
                 await self.on_building_construction_started(structure)
                 continue
+            elif structure.tag in self._structures_previous_map:
+                previous_frame_structure: Unit = self._structures_previous_map[
+                    structure.tag
+                ]
+                if previous_frame_structure.type_id != structure.type_id:
+                    await self.on_unit_type_changed(
+                        structure, previous_frame_structure.type_id
+                    )
             # From here on, only check completed structure, so we ignore structures with build_progress < 1
             if structure.build_progress < 1:
                 continue
@@ -307,23 +348,6 @@ class ObserverAI(BotAIInternal):
     async def _issue_unit_dead_events(self):
         for unit_tag in self.state.dead_units:
             await self.on_unit_destroyed(unit_tag)
-
-    async def _issue_vision_events(self) -> None:
-        # Call events for enemy unit entered vision
-        for enemy_unit in self.enemy_units:
-            if enemy_unit.tag not in self._enemy_units_previous_map:
-                await self.on_enemy_unit_entered_vision(enemy_unit)
-        for enemy_structure in self.enemy_structures:
-            if enemy_structure.tag not in self._enemy_structures_previous_map:
-                await self.on_enemy_unit_entered_vision(enemy_structure)
-
-        # Call events for enemy unit left vision
-        enemy_units_left_vision: set[int] = set(self._enemy_units_previous_map) - self.enemy_units.tags
-        for enemy_unit_tag in enemy_units_left_vision:
-            await self.on_enemy_unit_left_vision(enemy_unit_tag)
-        enemy_structures_left_vision: set[int] = set(self._enemy_structures_previous_map) - self.enemy_structures.tags
-        for enemy_structure_tag in enemy_structures_left_vision:
-            await self.on_enemy_unit_left_vision(enemy_structure_tag)
 
     async def on_unit_destroyed(self, unit_tag):
         """

@@ -69,6 +69,7 @@ class StepData(TypedDict):
     gas: int
     under_construction: Dict[int, int]
     newly_queued: Dict[int, int]
+    building_started: Dict[int, int]
 
 
 # todo include compressed data on units/buildings constructed in past step block into a single output
@@ -99,6 +100,12 @@ def compress_step_block(steps: List[StepData]) -> StepData:
     for s in steps:
         enemy_units.update(s["enemy_units_seen_and_alive"])
     base["enemy_units_seen_and_alive"] = enemy_units
+
+    accum = defaultdict(int)
+    for s in steps:
+        for k, v in s["building_started"].items():
+            accum[k] += v
+    base["building_started"] = dict(accum)
 
     return base
 
@@ -145,6 +152,7 @@ class _ObservationAggregator(ObserverAI):
         self.player_units: Dict[int, Dict] = {}
         self.prev_player_units = {}
         self.newly_queued = {unit.value: 0 for unit in VALID_UNITS[Race.Zerg]}
+        self.building_started = {unit.value: 0 for unit in VALID_UNITS[Race.Zerg]}
 
         self.player_pov: int = player_pov
         self.workers_built = 0
@@ -205,6 +213,13 @@ class _ObservationAggregator(ObserverAI):
 
         :param unit:
         """
+        # Only track own buildings
+        if unit.owner_id != self.player_pov:
+            return
+
+        # Only track buildings you care about
+        if unit.type_id in VALID_UNITS[Race.Zerg]:
+            self.building_started[unit.type_id.value] += 1
 
     async def on_unit_type_changed(self, unit: Unit, previous_type: UnitTypeId) -> None:
         """Override this in your bot class. This function is called when a unit type has changed. To get the current UnitTypeId of the unit, use 'unit.type_id'
@@ -215,7 +230,7 @@ class _ObservationAggregator(ObserverAI):
         Examples::
 
             print(f"My unit changed type: {unit} from {previous_type} to {unit.type_id}")
-
+        appears to only track units? Not structures? I need to make something else to track structures.
         :param unit:
         :param previous_type:
         """
@@ -407,6 +422,7 @@ class _ObservationAggregator(ObserverAI):
             "gas": self.vespene,
             "under_construction": self.under_construction.copy(),
             "newly_queued": self.newly_queued.copy(),
+            "building_started": self.building_started.copy(),
         }
 
         self.recent_steps = getattr(self, "recent_steps", [])
@@ -456,6 +472,7 @@ class _ObservationAggregator(ObserverAI):
         self.under_construction = {unit.value: 0 for unit in VALID_UNITS[Race.Zerg]}
         self.workers_built = 0
         self.army_built = 0
+        self.building_started = {unit.value: 0 for unit in VALID_UNITS[Race.Zerg]}
 
 
 class ReplaySimulator:
@@ -593,8 +610,8 @@ if __name__ == "__main__":
     else:
         simulator = ReplaySimulator(
             # "tests/replays/Alcyone LE (6).SC2Replay",
-            "1000 replays/26382815.SC2Replay",
-            save_name="1000 extracts/26382815.SC2Replay",
+            "1000 replays/26949276.SC2Replay",
+            save_name="1000 extracts/26949276.SC2Replay",
             fow_pov=2,
             step_size=20,
         )

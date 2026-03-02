@@ -3,10 +3,16 @@
 import argparse, json, os, subprocess, time
 from datetime import datetime
 
-STEP_SIZE = 1
+STEP_SIZE = 20
 
 
-def process_folder(input_folder="1000 replays", output_folder="output", max_parallel=4):
+def process_folder(
+    input_folder="D:/betastar/replays1",
+    output_folder="output",
+    max_parallel=4,
+    max_games=None,
+):
+    games_started = 0
     with open("data.json") as f:
         detailed_info = json.load(f)
 
@@ -14,31 +20,32 @@ def process_folder(input_folder="1000 replays", output_folder="output", max_para
     running = []
     t0 = time.time()
 
-    for count, filename in enumerate(os.listdir(input_folder), 1):
+    for count, filename in enumerate(sorted(os.listdir(input_folder)), 1):
+
+        if max_games is not None and games_started >= max_games:
+            print(f"\nReached max_games={max_games}. Stopping.\n")
+            break
         game_id = filename.removesuffix(".SC2Replay")
         print(game_id)
         info = detailed_info.get(game_id)
-        if not info or not (info["zerg"] and info["protoss"]):
-            continue
 
         file_path = os.path.join(input_folder, filename)
         output_base = os.path.join(output_folder, game_id)
-        p1_path, p2_path = output_base + "_p1", output_base + "_p2"
 
-        if os.path.exists(p1_path) and os.path.exists(p2_path):
+        if os.path.exists(output_base + "_1.json.gz"):
             continue
 
         running.append(
             subprocess.Popen(
-                ["python", "simulator.py", file_path, p1_path, "1", str(STEP_SIZE)]
+                ["python", "simulator.py", file_path, output_base, "1", str(STEP_SIZE)]
             )
         )
         running.append(
             subprocess.Popen(
-                ["python", "simulator.py", file_path, p2_path, "2", str(STEP_SIZE)]
+                ["python", "simulator.py", file_path, output_base, "2", str(STEP_SIZE)]
             )
         )
-
+        games_started += 1
         while len(running) >= max_parallel:
             running = [p for p in running if p.poll() is None]
             if len(running) >= max_parallel:
@@ -63,5 +70,14 @@ if __name__ == "__main__":
         default=1,
         help="maximum concurrent simulator processes",
     )
+    ap.add_argument(
+        "--max-games",
+        type=int,
+        default=None,
+        help="maximum number of games to process (default: all)",
+    )
     args = ap.parse_args()
-    process_folder(max_parallel=args.max_procs)
+    process_folder(
+        max_parallel=args.max_procs,
+        max_games=args.max_games,
+    )

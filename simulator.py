@@ -11,7 +11,6 @@ from pympler import muppy, summary, asizeof
 
 import numpy as np
 import psutil
-
 from constants import WORKERS, NOT_ARMY, VALID_UNITS
 from sc2.constants import CREATION_ABILITY_FIX
 from sc2.data import Race, race_worker
@@ -70,6 +69,8 @@ class StepData(TypedDict):
     under_construction: Dict[int, int]
     newly_queued: Dict[int, int]
     building_started: Dict[int, int]
+    lair_started: int
+    hive_started: int
 
 
 # todo include compressed data on units/buildings constructed in past step block into a single output
@@ -106,6 +107,8 @@ def compress_step_block(steps: List[StepData]) -> StepData:
         for k, v in s["building_started"].items():
             accum[k] += v
     base["building_started"] = dict(accum)
+    base["lair_started"] = int(any(s["lair_started"] for s in steps))
+    base["hive_started"] = int(any(s["hive_started"] for s in steps))
 
     return base
 
@@ -141,6 +144,8 @@ class _ObservationAggregator(ObserverAI):
         player_pov: int = 0,
         save_interval: int = 100,
     ):
+        self._lair_started_this_step = None
+        self._hive_started_this_step = None
         self.recent_steps = []
         self.iteration: int = 0
         self.step_size = step_size
@@ -153,6 +158,8 @@ class _ObservationAggregator(ObserverAI):
         self.prev_player_units = {}
         self.newly_queued = {unit.value: 0 for unit in VALID_UNITS[Race.Zerg]}
         self.building_started = {unit.value: 0 for unit in VALID_UNITS[Race.Zerg]}
+        self._lair_started = 0
+        self._hive_started = 0
 
         self.player_pov: int = player_pov
         self.workers_built = 0
@@ -175,7 +182,13 @@ class _ObservationAggregator(ObserverAI):
 
     async def on_start(self):
         # Game engine advances step_size gameloops before sending observation
+        print("POV:", self.player_pov)
+        print("self.race:", self.race)
+        print("enemy_race:", self.enemy_race)
         self.client.game_step = self.step_size
+        if self.player_pov in (1, 2) and self.race != Race.Zerg:
+            print(f"Skipping replay: POV {self.player_pov} is {self.race}")
+            await self.client.leave()
 
     async def on_unit_created(self, unit: Unit):
         """Override this in your bot class. This function is called when a unit is created.
@@ -234,6 +247,8 @@ class _ObservationAggregator(ObserverAI):
         :param unit:
         :param previous_type:
         """
+        # Todo add tracking for queens
+        # I believe i can use this for tracking if a queen is being produced. I think previous_type is hatchery.
         # newly_queued is used to track what type freshly enters queue
         if unit.orders:
             if (
@@ -244,6 +259,7 @@ class _ObservationAggregator(ObserverAI):
                 self.newly_queued[
                     get_unit_type(unit.orders[0].ability.button_name).value
                 ] += 1
+
         else:
             if unit.type_id == UnitTypeId.LAIR:
                 print("hi")
@@ -276,9 +292,6 @@ class _ObservationAggregator(ObserverAI):
                 if order.ability.exact_id == creationAbilityID:
                     return order.progress
         return 0
-
-    # TODO Track this^
-    # actually already_pending tracks this. So im not sure. Maybe can remove
 
     def already_pending(self, unit_type: UpgradeId | UnitTypeId) -> float:
         """
@@ -317,6 +330,7 @@ class _ObservationAggregator(ObserverAI):
 
     def save_data(self, output_name):
         data = self.final_data
+        print(f"[SAVE] Writing {len(data)} blocks to {output_name}.json.gz")
         with gzip.open(output_name + ".json.gz", "wt", encoding="utf-8") as f:
             json.dump(data, f, cls=CustomEncoder)
             f.flush()
@@ -349,10 +363,6 @@ class _ObservationAggregator(ObserverAI):
         self._prepare_units()
 
     async def on_step(self, iteration: int):
-
-        # TODO: Only basic information is included for now, need to add more
-        # stuff to aggregate later on
-
         self.iteration = iteration
 
         # Initialize the full-sized visibility map with -1
@@ -399,6 +409,28 @@ class _ObservationAggregator(ObserverAI):
             id = unit.value
             self.under_construction[id] = int(self.already_pending(unit))
 
+        # Todo Add tracking for greater spire + lurker den morphs
+        # Lair and Hive tracking, possible to add greater spire/lurker den if necessary
+        # One-shot detection for Lair
+        if not self._lair_started:
+            if self.already_pending(UnitTypeId.LAIR) > 0:
+                self._lair_started = True
+                self._lair_started_this_step = True
+            else:
+                self._lair_started_this_step = False
+        else:
+            self._lair_started_this_step = False
+
+        # One-shot detection for Hive
+        if not self._hive_started:
+            if self.already_pending(UnitTypeId.HIVE) > 0:
+                self._hive_started = True
+                self._hive_started_this_step = True
+            else:
+                self._hive_started_this_step = False
+        else:
+            self._hive_started_this_step = False
+
         one_step: StepData = {
             "iteration": iteration,
             "visibility": self.visibility.tolist(),
@@ -423,6 +455,8 @@ class _ObservationAggregator(ObserverAI):
             "under_construction": self.under_construction.copy(),
             "newly_queued": self.newly_queued.copy(),
             "building_started": self.building_started.copy(),
+            "lair_started": int(self._lair_started_this_step),
+            "hive_started": int(self._hive_started_this_step),
         }
 
         self.recent_steps = getattr(self, "recent_steps", [])
@@ -434,7 +468,7 @@ class _ObservationAggregator(ObserverAI):
             self.block_index += 1
             self.recent_steps.clear()
 
-        if iteration % self.save_interval == 0:
+        if iteration != 0 and iteration % self.save_interval == 0:
             all_objects = muppy.get_objects()
             sum1 = summary.summarize(all_objects)
             summary.print_(sum1)
@@ -464,7 +498,8 @@ class _ObservationAggregator(ObserverAI):
                 print("recent_steps:", asizeof.asizeof(self.recent_steps))
                 print("final_data:", asizeof.asizeof(self.final_data))
                 print("visibility:", asizeof.asizeof(self.visibility))
-            if self.time > 600.0:
+            if self.time > 1200.0:
+                print("[FORCE END] 20 minute cutoff reached")
                 await self.client.leave()
                 return
         print_memory_usage()
@@ -564,15 +599,19 @@ class CustomEncoder(json.JSONEncoder):
             return obj.tolist()
         if isinstance(obj, Race):
             return (
-                "zerg"
+                2
+                # zerg
                 if obj == Race.Zerg
                 else (
-                    "terran"
+                    1
+                    # terran
                     if obj == Race.Terran
                     else (
-                        "protoss"
+                        3
+                        # protoss
                         if obj == Race.Protoss
-                        else "random" if obj == Race.Random else "unknown"
+                        else 4 if obj == Race.Random else 5
+                        # random, unknown
                     )
                 )
             )
@@ -611,8 +650,9 @@ if __name__ == "__main__":
         simulator = ReplaySimulator(
             # "tests/replays/Alcyone LE (6).SC2Replay",
             "1000 replays/26949276.SC2Replay",
+            # "1000 replays/10000 Feet LE (3).SC2Replay",
             save_name="1000 extracts/26949276.SC2Replay",
-            fow_pov=2,
+            fow_pov=1,
             step_size=20,
         )
         simulator.run_simulation()

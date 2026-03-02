@@ -7,8 +7,38 @@ import time
 
 from numpy.ma.extras import compress_rows
 
+INPUT_DIR = "output"
+OUTPUT_DIR = "prunes"
+#
 # with gzip.open('1000 extracts/26382813.SC2Replay_p1.json.gz', 'rt', encoding='utf-8') as f:
 #     data = json.load(f)
+DATA_SAVE_LOCATION = "D:/betastar/parser/data.json"
+with open(DATA_SAVE_LOCATION, "r", encoding="utf-8") as f:
+    MMR_DATA = json.load(f)
+
+
+def extract_mmr(game_id):
+    return MMR_DATA[game_id]["mmr"]
+
+
+def extract_win_flag(game_id: str) -> int:
+    """
+    Returns 1 if Zerg (POV player) won, else 0.
+    Assumes all games are Zerg POV.
+    """
+    game = MMR_DATA[game_id]
+    winner_id = game["winner_id"]
+    players = game["players"]
+
+    # Find which player is Zerg
+    for p in players.values():
+        if p["race"].lower() == "zerg":
+            zerg_id = p["id"]
+            break
+    else:
+        raise ValueError(f"No Zerg player found in game {game_id}")
+
+    return 1 if winner_id == zerg_id else 0
 
 
 def prune_unit_data(original_unit, current_state_iteration):
@@ -63,7 +93,7 @@ def prune_dict_of_units(unit_dict: dict, current_iteration):
 
 
 ##This will be the base. The following is for playing with model inputs
-def prune_state(original_state: dict) -> dict:
+def prune_state(original_state: dict, mmr: int) -> dict:
     current_iteration = original_state["iteration"]
     pruned = {
         k: original_state[k]
@@ -87,8 +117,13 @@ def prune_state(original_state: dict) -> dict:
             "gas",
             "under_construction",
             "newly_queued",
+            "lair_started",
+            "hive_started",
+            "building_started",
         ]
     }
+    # Rounded to make it easier to process
+    pruned["mmr"] = int(mmr)
     pruned["visibility"] = prune_visibility(original_state["visibility"])
     pruned.update(
         {
@@ -103,10 +138,6 @@ def prune_state(original_state: dict) -> dict:
     #     }
     # )
     return pruned
-
-
-# todo i think add building tracking as well, seperate from the regular unit tracking
-# Done i think
 
 
 # I intend to truncate units according to health. Hopefully this prioritizes highest impact units.
@@ -152,9 +183,12 @@ def truncate_to_50(units, mode=0) -> list:
 
 
 def compress_pruned(pruned: dict) -> dict:
+    # lair_started / hive_started are one-shot binary flags indicating
+    # whether the tech transition began in this compressed timestep
     compressed = {
         k: pruned[k]
         for k in [
+            "mmr",
             "iteration",
             "player_pov",
             "own_spawn_x",
@@ -168,12 +202,16 @@ def compress_pruned(pruned: dict) -> dict:
             "supply_used",
             "supply_left",
             "supply_cap",
-            "workers_built",
-            "army_built",
             "minerals",
             "gas",
             "visibility",
             "under_construction",
+            "lair_started",
+            "hive_started",
+            "building_started",
+            "newly_queued",
+            "workers_built",
+            "army_built",
         ]
     }
 
@@ -207,9 +245,6 @@ def compress_pruned(pruned: dict) -> dict:
         else:
             enemy_units[tag] = unit
 
-    print(len(enemy_units))
-    print(len(enemy_structures))
-    print(enemy_structures)
     enemy_structures = truncate_to_50(enemy_structures, 1)
     enemy_units = truncate_to_50(enemy_units, 1)
     compressed["enemy_structures"] = enemy_structures
@@ -217,9 +252,125 @@ def compress_pruned(pruned: dict) -> dict:
     return compressed
 
 
-with gzip.open(
-    "1000 extracts/26382815.SC2Replay_1.json.gz", "rt", encoding="utf-8"
-) as f:
-    data = json.load(f)
-print(compress_pruned(prune_state(data[str(6)])).keys())
-print(compress_pruned(prune_state(data[str(6)]))["player_units"])
+import os
+import gzip
+import json
+
+
+def stitch_and_prune_replay(replay_prefix: str):
+    """
+    replay_prefix example: "26382815.SC2Replay"
+    """
+
+    mmr = extract_mmr(replay_prefix)
+
+    # 1. Find all matching files
+    files = [
+        f
+        for f in os.listdir(INPUT_DIR)
+        if f.startswith(replay_prefix) and f.endswith(".json.gz")
+    ]
+
+    if not files:
+        raise RuntimeError(f"No files found for {replay_prefix}")
+
+    # 2. Sort by chunk index (_0, _1, _2, ...)
+    files.sort(key=lambda x: int(x.split("_")[-1].split(".")[0]))
+
+    print(f"Found {len(files)} chunks:")
+    for f in files:
+        print("  ", f)
+
+    # 3. Process and stitch
+    stitched = []
+    # Note last value of a stack is the same as the first value of the next stack
+    for chunk_idx, fname in enumerate(files):
+        path = os.path.join(INPUT_DIR, fname)
+
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            chunk = json.load(f)
+
+        start = 0 if chunk_idx == 0 else 1  # DROP first timestep of later chunks
+
+        for i in range(start, len(chunk)):
+            state = chunk[str(i)]
+            stitched.append(compress_pruned(prune_state(state, mmr)))
+
+    return stitched
+
+
+def split_state_and_actions(final_dict: dict) -> dict:
+    """
+    Splits a compressed timestep dict into:
+      {
+        "state":   <environment / observation>,
+        "actions": <player action signals>
+      }
+
+    Assumes input is the output of compress_pruned().
+    """
+
+    action_keys = {
+        "building_started",
+        "newly_queued",
+        "workers_built",
+        "army_built",
+        "lair_started",
+        "hive_started",
+        "visibility",
+    }
+
+    state = {}
+    actions = {}
+
+    for k, v in final_dict.items():
+        if k in action_keys:
+            actions[k] = v
+        else:
+            state[k] = v
+
+    return {
+        "state": state,
+        "actions": actions,
+    }
+
+
+# print(compress_pruned(prune_state(data[str(6)])).keys())
+# print(compress_pruned(prune_state(data[str(6)]))["under_construction"])
+def process(prefix):
+    stitched = stitch_and_prune_replay(prefix)
+
+    # --- NEW: compute replay-level winner flag ---
+    win_flag = extract_win_flag(prefix)
+
+    # Split each timestep into state/actions
+    sa = [split_state_and_actions(t) for t in stitched]
+
+    # --- NEW: wrap frames and winner separately ---
+    final_output = {"winner": win_flag, "frames": sa}  # 1 if Zerg won, else 0
+
+    # 4. Save
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    output_path = os.path.join(OUTPUT_DIR, prefix + ".json.gz")
+
+    with gzip.open(output_path, "wt", encoding="utf-8") as f:
+        json.dump(final_output, f)
+
+
+def main(folder=INPUT_DIR):
+    seen = set()
+
+    for filename in os.listdir(folder):
+        if not filename.endswith(".json.gz"):
+            continue
+
+        # Extract prefix before first underscore
+        game_id = filename.split("_", 1)[0]
+
+        if game_id not in seen:
+            seen.add(game_id)
+            process(game_id)
+
+
+if __name__ == "__main__":
+    main()

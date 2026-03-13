@@ -1,11 +1,17 @@
 import gzip
 import json
 import os
-
+from sklearn.preprocessing import StandardScaler
+import joblib
+import hashlib
+from sklearn.preprocessing import MinMaxScaler
 from s2protocol.build import read_command_output
 
 FOLDER = r"D:\betastar\BetaStar\prunes"
-SAVE_PATH = "D:/betastar/dataset_split.npz"
+SCALER_TYPE = "minimax"  # Options: "minmax", "zscore", None
+
+SCALER_PATH = f"D:/betastar/scaler_{SCALER_TYPE}.pkl"
+SAVE_PATH = f"D:/betastar/dataset_split_{SCALER_TYPE}.npz"
 HORIZON = 5
 # with gzip.open("prunes/26950686.json.gz", "rt", encoding="utf-8") as f:
 #     data = json.load(f)
@@ -21,7 +27,10 @@ import numpy as np
 from torch.utils.data import random_split, TensorDataset, DataLoader
 from torch.autograd import Variable
 
-torch.manual_seed(42)
+
+def get_files_hash(files):
+    h = hashlib.md5("".join(sorted(files)).encode()).hexdigest()
+    return h
 
 
 # for time in data:
@@ -186,7 +195,7 @@ def build_corpus_dataset(folder_path, horizon=5, files=None):
             replay_json = json.load(f)
 
         frames = replay_json["frames"]
-        winner = replay_json["winner"]  # <-- NEW
+        winner = replay_json["winner"]
 
         if len(frames) < horizon:
             print(f"Skipping {filename} (too short).")
@@ -270,6 +279,20 @@ def build_dataset():
     X_train, y_train, y_win_train = build_corpus_dataset(FOLDER, files=train_files)
     X_test, y_test, y_win_test = build_corpus_dataset(FOLDER, files=test_files)
 
+    if SCALER_TYPE == "minmax":
+        scaler = MinMaxScaler()
+    elif SCALER_TYPE == "zscore":
+        scaler = StandardScaler()
+    else:
+        scaler = None
+
+    if scaler is not None:
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
+        joblib.dump(scaler, SCALER_PATH)
+
+    files_hash = get_files_hash(all_files)
+
     np.savez_compressed(
         SAVE_PATH,
         horizon=np.array(HORIZON),
@@ -279,6 +302,7 @@ def build_dataset():
         X_test=X_test,
         y_test=y_test,
         y_win_test=y_win_test,
+        files_hash=np.array(files_hash),
     )
 
     X_train, y_train, y_win_train = (
@@ -298,7 +322,12 @@ def build_dataset():
 def get_dataset(horizon=HORIZON):
     try:
         data = np.load(SAVE_PATH)
-
+        current_hash = get_files_hash(
+            [f for f in os.listdir(FOLDER) if f.endswith(".json.gz")]
+        )
+        assert (
+            str(data["files_hash"]) == current_hash
+        ), "File list changed, rebuilding..."
         assert int(data["horizon"]) == horizon, "Horizon mismatch"
 
         X_train = torch.from_numpy(data["X_train"])
@@ -307,6 +336,7 @@ def get_dataset(horizon=HORIZON):
         X_test = torch.from_numpy(data["X_test"])
         y_test = torch.from_numpy(data["y_test"])
         y_win_test = torch.from_numpy(data["y_win_test"])
+        print("dataset loaded")
 
     except Exception as e:
         print(f"No saved dataset found ({e}), building from scratch...")
@@ -328,6 +358,13 @@ def get_dataset(horizon=HORIZON):
 
 X_train, y_train, y_win_train, X_test, y_test, y_win_test = get_dataset()
 
+# add this right after loading y_win_train
+win_rate = y_win_train.mean().item()
+print(f"Training win rate: {win_rate:.3f}")
+# e.g. 0.30 → losses outnumber wins 2.3:1
+pos_weight_val = (1 - win_rate) / win_rate
+print(f"pos_weight to use: {pos_weight_val:.2f}")
+
 
 class linearRegression(torch.nn.Module):
     def __init__(self, inputSize, outputSize):
@@ -343,7 +380,7 @@ print(f"Train samples: {X_train.shape[0]}")
 print(f"Test samples: {X_test.shape[0]}")
 inputDim = X_train.shape[1]
 outputDim = y_win_train.shape[1]
-learningRate = 5e-8
+learningRate = 1e-4
 epochs = 5000
 train_losses = []
 test_losses = []
@@ -351,7 +388,10 @@ model = linearRegression(inputDim, outputDim)
 ##### For GPU #######
 if torch.cuda.is_available():
     model.cuda()
-criterion = torch.nn.BCEWithLogitsLoss()
+pos_weight = torch.tensor([pos_weight_val])
+if torch.cuda.is_available():
+    pos_weight = pos_weight.cuda()
+criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 optimizer = torch.optim.SGD(model.parameters(), lr=learningRate)
 for epoch in range(epochs):
     # Converting inputs and labels to Variable
@@ -386,19 +426,27 @@ for epoch in range(epochs):
 plt.plot(train_losses)
 plt.xlabel("Epoch")
 
-plt.plot(train_losses, label="Train")
-plt.plot(test_losses, label="Test")
-plt.legend()
-plt.show()
+# plt.plot(train_losses, label="Train")
+# plt.plot(test_losses, label="Test")
+# plt.legend()
+# plt.show()
 
 with torch.no_grad():
     raw = model(X_test)
-    probs = torch.sigmoid(raw)  # convert to 0-1 probabilities
+    probs = torch.sigmoid(raw)
     preds = (probs > 0.5).float()
+    y = y_win_test
 
-    accuracy = (preds == y_win_test).float().mean()
-    print(f"Accuracy: {accuracy:.3f}")
+    tp = ((preds == 1) & (y == 1)).sum().item()
+    fp = ((preds == 1) & (y == 0)).sum().item()
+    fn = ((preds == 0) & (y == 1)).sum().item()
+    tn = ((preds == 0) & (y == 0)).sum().item()
 
-    # See what the model is actually predicting
+    precision = tp / (tp + fp + 1e-8)
+    recall    = tp / (tp + fn + 1e-8)
+    f1        = 2 * precision * recall / (precision + recall + 1e-8)
+
+    print(f"Confusion matrix:  TP={tp}  FP={fp}  FN={fn}  TN={tn}")
+    print(f"Precision: {precision:.3f}  Recall: {recall:.3f}  F1: {f1:.3f}")
     print(f"Predicted win rate: {probs.mean():.3f}")
-    print(f"Actual win rate: {y_win_test.mean():.3f}")
+    print(f"Actual win rate:    {y.mean():.3f}")

@@ -63,5 +63,50 @@ VALID_UNITS = {
         # Macro & transport
         UnitTypeId.NYDUSNETWORK,
         UnitTypeId.NYDUSCANAL,
-    }
+    },
+    Race.Protoss: {
+        # Workers
+        UnitTypeId.PROBE,
+        # Army units
+        UnitTypeId.ZEALOT,
+        UnitTypeId.STALKER,
+        UnitTypeId.SENTRY,
+        UnitTypeId.ADEPT,
+        UnitTypeId.HIGHTEMPLAR,
+        UnitTypeId.DARKTEMPLAR,
+        UnitTypeId.IMMORTAL,
+        UnitTypeId.COLOSSUS,
+        UnitTypeId.DISRUPTOR,
+        UnitTypeId.ARCHON,
+        # Air units
+        UnitTypeId.PHOENIX,
+        UnitTypeId.VOIDRAY,
+        UnitTypeId.ORACLE,
+        UnitTypeId.CARRIER,
+        UnitTypeId.TEMPEST,
+        UnitTypeId.MOTHERSHIP,
+        # Support
+        UnitTypeId.OBSERVER,
+        UnitTypeId.WARPPRISM,
+        UnitTypeId.INTERCEPTOR,
+        # Core structures
+        UnitTypeId.NEXUS,
+        UnitTypeId.PYLON,
+        UnitTypeId.ASSIMILATOR,
+        UnitTypeId.GATEWAY,
+        UnitTypeId.WARPGATE,
+        UnitTypeId.FORGE,
+        UnitTypeId.CYBERNETICSCORE,
+        # Defense
+        UnitTypeId.PHOTONCANNON,
+        UnitTypeId.SHIELDBATTERY,
+        # Tech structures
+        UnitTypeId.TWILIGHTCOUNCIL,
+        UnitTypeId.TEMPLARARCHIVE,
+        UnitTypeId.DARKSHRINE,
+        UnitTypeId.ROBOTICSFACILITY,
+        UnitTypeId.ROBOTICSBAY,
+        UnitTypeId.STARGATE,
+        UnitTypeId.FLEETBEACON,
+    },
 }

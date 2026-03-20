@@ -6,6 +6,9 @@ import json
 import time
 
 from numpy.ma.extras import compress_rows
+from constants import WORKERS, NOT_ARMY, VALID_UNITS
+from sc2.data import Race
+from sc2.ids.unit_typeid import UnitTypeId
 
 INPUT_DIR = "output"
 OUTPUT_DIR = "prunes"
@@ -16,15 +19,83 @@ DATA_SAVE_LOCATION = "D:/betastar/parser/data.json"
 with open(DATA_SAVE_LOCATION, "r", encoding="utf-8") as f:
     MMR_DATA = json.load(f)
 
+import datetime
 
-def extract_mmr(game_id):
+CHANGELOG_PATH = "D:/betastar/changelog.json"
+
+
+def get_next_version() -> int:
+    """
+    Returns the next version number to write to.
+    If the latest logged version has a missing folder, reuses that version.
+    Otherwise increments to a new one.
+    """
+    if os.path.exists(CHANGELOG_PATH):
+        with open(CHANGELOG_PATH, "r") as f:
+            log = json.load(f)
+        if log:
+            latest = max(log, key=lambda x: x["version"])
+            if not os.path.exists(latest["output_dir"]):
+                return latest["version"]
+            return latest["version"] + 1
+
+    return 1
+
+
+def write_changelog(version: int, note: str):
+    """
+    Appends a new entry to the changelog.
+
+    Args:
+        version (int): The version number just created.
+        note (str): User-provided description of what changed.
+    """
+    if os.path.exists(CHANGELOG_PATH):
+        with open(CHANGELOG_PATH, "r") as f:
+            log = json.load(f)
+    else:
+        log = []
+
+    log.append(
+        {
+            "version": version,
+            "timestamp": datetime.datetime.now().isoformat(),
+            "output_dir": f"{OUTPUT_DIR}_v{version}",
+            "note": note,
+        }
+    )
+
+    with open(CHANGELOG_PATH, "w") as f:
+        json.dump(log, f, indent=2)
+
+    print(f"Changelog updated: v{version} — {note}")
+
+
+def extract_mmr(game_id: str) -> int:
+    """
+    Extracts the MMR value for a given game.
+
+    Args:
+        game_id (str): The replay filename prefix (e.g. "26382813.SC2Replay").
+
+    Returns:
+        int: The MMR value associated with the game.
+    """
     return MMR_DATA[game_id]["mmr"]
 
 
 def extract_win_flag(game_id: str) -> int:
     """
-    Returns 1 if Zerg (POV player) won, else 0.
-    Assumes all games are Zerg POV.
+    Determines whether the Zerg player won the game.
+
+    Args:
+        game_id (str): The replay filename prefix (e.g. "26382813.SC2Replay").
+
+    Returns:
+        int: 1 if Zerg won, 0 otherwise.
+
+    Raises:
+        ValueError: If no Zerg player is found in the game data.
     """
     game = MMR_DATA[game_id]
     winner_id = game["winner_id"]
@@ -41,7 +112,19 @@ def extract_win_flag(game_id: str) -> int:
     return 1 if winner_id == zerg_id else 0
 
 
-def prune_unit_data(original_unit, current_state_iteration):
+def prune_unit_data(original_unit: dict, current_state_iteration: int) -> dict:
+    """
+    Strips a unit dict down to only the fields needed for model input.
+
+    Args:
+        original_unit (dict): Raw unit data as extracted by the simulator.
+        current_state_iteration (int): The current game iteration, used to compute
+            how many iterations ago the unit was last seen.
+
+    Returns:
+        dict: Pruned unit with keys: unit_type, health, shield, energy,
+            is_structure, last_seen_x, last_seen_y, and optionally last_seen.
+    """
     pruned = {
         k: original_unit[k]
         for k in ["unit_type", "health", "shield", "energy", "is_structure"]
@@ -56,7 +139,17 @@ def prune_unit_data(original_unit, current_state_iteration):
     return pruned
 
 
-def prune_visibility(visibility, block_size=10):
+def prune_visibility(visibility: list, block_size: int = 10) -> list:
+    """
+    Downsamples a 2D visibility grid by taking the max value in each block.
+
+    Args:
+        visibility (list): 2D list of visibility values from the game state.
+        block_size (int): Size of each compression block. Default is 10.
+
+    Returns:
+        list: Compressed 2D grid where each cell is the max of its block.
+    """
     h = (len(visibility) + block_size - 1) // block_size
     w = (len(visibility[0]) + block_size - 1) // block_size
 
@@ -94,6 +187,17 @@ def prune_dict_of_units(unit_dict: dict, current_iteration):
 
 ##This will be the base. The following is for playing with model inputs
 def prune_state(original_state: dict, mmr: int) -> dict:
+    """
+    Extracts and prunes a raw game state down to the fields used for training.
+
+    Args:
+        original_state (dict): Full game state dict from the simulator.
+        mmr (int): MMR value to attach to this state.
+
+    Returns:
+        dict: Pruned state containing scalar game info, visibility grid,
+            player units, and enemy units seen and alive.
+    """
     current_iteration = original_state["iteration"]
     pruned = {
         k: original_state[k]
@@ -131,20 +235,51 @@ def prune_state(original_state: dict, mmr: int) -> dict:
             for k in ["player_units", "enemy_units_seen_and_alive"]
         }
     )
-    # pruned.update(
-    #     {
-    #         k: prune_dict_of_dicts(original_state[k], current_iteration)
-    #         for k in ["units_built"]
-    #     }
-    # )
     return pruned
+
+
+# Possibly increase what is measured beyond basic number
+def encode_units_by_type(
+    units: dict, race: Race, track_last_seen: bool = False
+) -> list:
+    vocab = {unit: 0 for unit in VALID_UNITS[race]}
+    last_seen = {unit: float("inf") for unit in VALID_UNITS[race]}
+
+    for unit in units.values():
+        unit_type = UnitTypeId(unit["unit_type"])
+        if unit_type in vocab:
+            vocab[unit_type] += 1
+            if track_last_seen and "last_seen" in unit:
+                last_seen[unit_type] = min(last_seen[unit_type], unit["last_seen"])
+
+    result = list(vocab.values())
+    if track_last_seen:
+        # Replace inf with -1 for unseen types
+        result += [-1 if v == float("inf") else v for v in last_seen.values()]
+    return result
 
 
 # I intend to truncate units according to health. Hopefully this prioritizes highest impact units.
 # Input is dict of units
 # mode 1 for truncating enemy units. Which will also have the iteration timer thing.
 # mode 0 for everything else
-def truncate_to_50(units, mode=0) -> list:
+def truncate_to_50(units: dict, mode: int = 0) -> list:
+    """
+    Sorts and truncates a unit dict to at most 50 units, then flattens to a fixed-length list.
+    Pads with -1 if fewer than 50 units are present.
+
+    Args:
+        units (dict): Dict of unit dicts, keyed by unit tag.
+        mode (int): 0 for own units (sorted by health descending),
+                    1 for enemy units (sorted by last_seen ascending, i.e. most recently seen first).
+
+    Returns:
+        list: Flat int list of length 350 (mode=0) or 400 (mode=1),
+            representing up to 50 units with 7 or 8 features each.
+
+    Note:
+        To be replaced by fixed vocab encoding. See compress_pruned().
+    """
     # Step 1: Sort and truncate top 50 by health
     if mode == 0:
         sorted_units = sorted(units.values(), key=lambda x: x["health"], reverse=True)[
@@ -183,6 +318,17 @@ def truncate_to_50(units, mode=0) -> list:
 
 
 def compress_pruned(pruned: dict) -> dict:
+    """
+    Converts a pruned state dict into the final flat representation used for model input.
+    Separates player and enemy units/structures and encodes them as fixed-length lists.
+
+    Args:
+        pruned (dict): Output of prune_state().
+
+    Returns:
+        dict: Compressed state with scalar fields, visibility grid, and four flat
+            unit lists: player_units, player_structures, enemy_units, enemy_structures.
+    """
     # lair_started / hive_started are one-shot binary flags indicating
     # whether the tech transition began in this compressed timestep
     compressed = {
@@ -218,37 +364,15 @@ def compress_pruned(pruned: dict) -> dict:
     player_units = {}
     player_structures = {}
 
-    for tag, unit in pruned["player_units"].items():
-        if unit["is_structure"]:
-            player_structures[tag] = unit
-        else:
-            player_units[tag] = unit
+    compressed["player_units"] = encode_units_by_type(pruned["player_units"], Race.Zerg)
 
     compressed["player_units"] = truncate_to_50(player_units)
     compressed["player_structures"] = truncate_to_50(player_structures)
 
-    enemy_structures = {}
-    enemy_units = {}
-
-    # removed because i remove tag from units
-    # enemy = pruned["enemy_units_seen_and_alive"]
-    # for l in enemy:
-    #     if enemy[l]["is_structure"]:
-    #         enemy_structures[enemy[l]["tag"]] = enemy[l]
-    #     else:
-    #         enemy_units[enemy[l]["tag"]] = enemy[l]
-
     enemy = pruned["enemy_units_seen_and_alive"]
-    for tag, unit in enemy.items():
-        if unit["is_structure"]:
-            enemy_structures[tag] = unit
-        else:
-            enemy_units[tag] = unit
-
-    enemy_structures = truncate_to_50(enemy_structures, 1)
-    enemy_units = truncate_to_50(enemy_units, 1)
-    compressed["enemy_structures"] = enemy_structures
-    compressed["enemy_units"] = enemy_units
+    compressed["enemy_units"] = encode_units_by_type(
+        enemy, Race.Protoss, track_last_seen=True
+    )
     return compressed
 
 
@@ -257,7 +381,20 @@ import gzip
 import json
 
 
-def stitch_and_prune_replay(replay_prefix: str):
+def stitch_and_prune_replay(replay_prefix: str) -> list:
+    """
+    Loads all chunked output files for a replay, stitches them together,
+    and returns the full sequence of compressed states.
+
+    Args:
+        replay_prefix (str): Replay filename without chunk suffix (e.g. "26382813.SC2Replay").
+
+    Returns:
+        list: Ordered list of compressed state dicts across the full replay.
+
+    Raises:
+        RuntimeError: If no matching chunk files are found.
+    """
     """
     replay_prefix example: "26382815.SC2Replay"
     """
@@ -301,6 +438,17 @@ def stitch_and_prune_replay(replay_prefix: str):
 
 def split_state_and_actions(final_dict: dict) -> dict:
     """
+    Splits a compressed timestep into observation (state) and label (actions).
+
+    Args:
+        final_dict (dict): Output of compress_pruned().
+
+    Returns:
+        dict: With two keys:
+            "state"   - environment features used as model input.
+            "actions" - player action signals used as model targets.
+    """
+    """
     Splits a compressed timestep dict into:
       {
         "state":   <environment / observation>,
@@ -337,7 +485,17 @@ def split_state_and_actions(final_dict: dict) -> dict:
 
 # print(compress_pruned(prune_state(data[str(6)])).keys())
 # print(compress_pruned(prune_state(data[str(6)]))["under_construction"])
-def process(prefix):
+def process(prefix: str) -> None:
+    """
+    Full pipeline for a single replay: stitches chunks, extracts winner flag,
+    splits into state/action pairs, and saves to the prunes output directory.
+
+    Args:
+        prefix (str): Replay filename prefix (e.g. "26382813.SC2Replay").
+
+    Returns:
+        None. Saves a gzipped JSON file to the prunes directory.
+    """
     stitched = stitch_and_prune_replay(prefix)
 
     # --- NEW: compute replay-level winner flag ---
@@ -357,16 +515,30 @@ def process(prefix):
         json.dump(final_output, f)
 
 
-def main(folder=INPUT_DIR):
-    seen = set()
+def main(folder: str = INPUT_DIR) -> None:
+    """
+    Iterates over all chunked replay files in a folder and processes each unique replay.
+    Skips duplicate chunks for the same replay. Versions output and logs changes.
 
+    Args:
+        folder (str): Path to the directory containing chunked .json.gz files.
+
+    Returns:
+        None.
+    """
+    global OUTPUT_DIR
+
+    version = get_next_version()
+    OUTPUT_DIR = f"{OUTPUT_DIR}_v{version}"
+
+    note = input(f"What changed in this version (v{version})? ").strip()
+    write_changelog(version, note)
+
+    seen = set()
     for filename in os.listdir(folder):
         if not filename.endswith(".json.gz"):
             continue
-
-        # Extract prefix before first underscore
         game_id = filename.split("_", 1)[0]
-
         if game_id not in seen:
             seen.add(game_id)
             process(game_id)

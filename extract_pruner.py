@@ -4,6 +4,7 @@
 import gzip
 import json
 import time
+import os
 
 from numpy.ma.extras import compress_rows
 from constants import WORKERS, NOT_ARMY, VALID_UNITS
@@ -44,7 +45,8 @@ def get_next_version() -> int:
 
 def write_changelog(version: int, note: str):
     """
-    Appends a new entry to the changelog.
+    Writes a changelog entry for the given version.
+    Overwrites the existing entry if reusing a deleted version, otherwise appends.
 
     Args:
         version (int): The version number just created.
@@ -56,14 +58,21 @@ def write_changelog(version: int, note: str):
     else:
         log = []
 
-    log.append(
-        {
-            "version": version,
-            "timestamp": datetime.datetime.now().isoformat(),
-            "output_dir": f"{OUTPUT_DIR}_v{version}",
-            "note": note,
-        }
-    )
+    # Overwrite existing entry if reusing a deleted version
+    for entry in log:
+        if entry["version"] == version:
+            entry["timestamp"] = datetime.datetime.now().isoformat()
+            entry["note"] = note
+            break
+    else:
+        log.append(
+            {
+                "version": version,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "output_dir": f"{OUTPUT_DIR}_v{version}",
+                "note": note,
+            }
+        )
 
     with open(CHANGELOG_PATH, "w") as f:
         json.dump(log, f, indent=2)
@@ -361,24 +370,11 @@ def compress_pruned(pruned: dict) -> dict:
         ]
     }
 
-    player_units = {}
-    player_structures = {}
-
     compressed["player_units"] = encode_units_by_type(pruned["player_units"], Race.Zerg)
 
-    compressed["player_units"] = truncate_to_50(player_units)
-    compressed["player_structures"] = truncate_to_50(player_structures)
-
     enemy = pruned["enemy_units_seen_and_alive"]
-    compressed["enemy_units"] = encode_units_by_type(
-        enemy, Race.Protoss, track_last_seen=True
-    )
+    compressed["enemy_units"] = encode_units_by_type(enemy, Race.Protoss, track_last_seen=True)
     return compressed
-
-
-import os
-import gzip
-import json
 
 
 def stitch_and_prune_replay(replay_prefix: str) -> list:

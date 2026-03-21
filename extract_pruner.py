@@ -373,7 +373,9 @@ def compress_pruned(pruned: dict) -> dict:
     compressed["player_units"] = encode_units_by_type(pruned["player_units"], Race.Zerg)
 
     enemy = pruned["enemy_units_seen_and_alive"]
-    compressed["enemy_units"] = encode_units_by_type(enemy, Race.Protoss, track_last_seen=True)
+    compressed["enemy_units"] = encode_units_by_type(
+        enemy, Race.Protoss, track_last_seen=True
+    )
     return compressed
 
 

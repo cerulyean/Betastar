@@ -7,9 +7,35 @@ import time
 import os
 
 from numpy.ma.extras import compress_rows
+from sc2reader.data import datapacks
+
 from constants import WORKERS, NOT_ARMY, VALID_UNITS
 from sc2.data import Race
 from sc2.ids.unit_typeid import UnitTypeId
+
+# Build a supply lookup keyed by UnitTypeId name (uppercase).
+# sc2reader drops the "MP" suffix that python-sc2 uses for some LotV units,
+# so we patch those manually.
+_lotv = datapacks["LotV"]
+_latest_build = max(k for k in _lotv.keys() if k != "base")
+_dp = _lotv[_latest_build]
+_SUPPLY_BY_NAME = {
+    attr.upper(): getattr(_dp, attr).supply
+    for attr in dir(_dp)
+    if hasattr(getattr(_dp, attr), "supply") and hasattr(getattr(_dp, attr), "id")
+}
+_NAME_FIXES = {
+    "LURKERMP": "LURKER",
+    "LURKERDENMP": "LURKERDEN",
+    "SWARMHOSTMP": "SWARMHOST",
+    "NYDUSCANAL": "NYDUSWORM",
+}
+
+
+def _get_supply(unit_type_id: UnitTypeId) -> float:
+    name = _NAME_FIXES.get(unit_type_id.name, unit_type_id.name)
+    return _SUPPLY_BY_NAME.get(name, 0)
+
 
 INPUT_DIR = "output"
 OUTPUT_DIR = "prunes"
@@ -58,7 +84,6 @@ def write_changelog(version: int, note: str):
     else:
         log = []
 
-    # Overwrite existing entry if reusing a deleted version
     for entry in log:
         if entry["version"] == version:
             entry["timestamp"] = datetime.datetime.now().isoformat()
@@ -69,7 +94,7 @@ def write_changelog(version: int, note: str):
             {
                 "version": version,
                 "timestamp": datetime.datetime.now().isoformat(),
-                "output_dir": f"{OUTPUT_DIR}_v{version}",
+                "output_dir": f"prunes_v{version}",  # was: f"{OUTPUT_DIR}_v{version}"
                 "note": note,
             }
         )
@@ -251,8 +276,9 @@ def prune_state(original_state: dict, mmr: int) -> dict:
 def encode_units_by_type(
     units: dict, race: Race, track_last_seen: bool = False
 ) -> list:
-    vocab = {unit: 0 for unit in VALID_UNITS[race]}
-    last_seen = {unit: float("inf") for unit in VALID_UNITS[race]}
+    sorted_vocab = sorted(VALID_UNITS[race], key=lambda u: u.value)
+    vocab = {unit: 0 for unit in sorted_vocab}
+    last_seen = {unit: float("inf") for unit in sorted_vocab}
 
     for unit in units.values():
         unit_type = UnitTypeId(unit["unit_type"])
@@ -263,7 +289,6 @@ def encode_units_by_type(
 
     result = list(vocab.values())
     if track_last_seen:
-        # Replace inf with -1 for unseen types
         result += [-1 if v == float("inf") else v for v in last_seen.values()]
     return result
 
@@ -399,7 +424,6 @@ def stitch_and_prune_replay(replay_prefix: str) -> list:
 
     mmr = extract_mmr(replay_prefix)
 
-    # 1. Find all matching files
     files = [
         f
         for f in os.listdir(INPUT_DIR)
@@ -409,27 +433,38 @@ def stitch_and_prune_replay(replay_prefix: str) -> list:
     if not files:
         raise RuntimeError(f"No files found for {replay_prefix}")
 
-    # 2. Sort by chunk index (_0, _1, _2, ...)
     files.sort(key=lambda x: int(x.split("_")[-1].split(".")[0]))
 
     print(f"Found {len(files)} chunks:")
     for f in files:
         print("  ", f)
 
-    # 3. Process and stitch
     stitched = []
-    # Note last value of a stack is the same as the first value of the next stack
+    prev_tags = set()
+
     for chunk_idx, fname in enumerate(files):
         path = os.path.join(INPUT_DIR, fname)
 
         with gzip.open(path, "rt", encoding="utf-8") as f:
             chunk = json.load(f)
 
-        start = 0 if chunk_idx == 0 else 1  # DROP first timestep of later chunks
+        start = 0 if chunk_idx == 0 else 1
 
         for i in range(start, len(chunk)):
             state = chunk[str(i)]
-            stitched.append(compress_pruned(prune_state(state, mmr)))
+            pruned = prune_state(state, mmr)
+
+            new_tags = set(pruned["player_units"].keys()) - prev_tags
+            new_units = {t: pruned["player_units"][t] for t in new_tags}
+            pruned["army_built"] = sum(
+                _get_supply(UnitTypeId(u["unit_type"]))
+                for u in new_units.values()
+                if _get_supply(UnitTypeId(u["unit_type"])) > 0
+                and UnitTypeId(u["unit_type"]) not in WORKERS
+            )
+
+            prev_tags = set(pruned["player_units"].keys())
+            stitched.append(compress_pruned(pruned))
 
     return stitched
 

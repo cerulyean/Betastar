@@ -14,13 +14,15 @@ import joblib
 # =============================================================================
 # CONFIG
 # =============================================================================
-FOLDER = r"D:\betastar\BetaStar\prunes"
-SCALER_TYPE = "minmax"  # "minmax" | "zscore" | None
+FOLDER = r"D:\betastar\BetaStar\prunes_v3"
+SCALER_TYPE = None  # "minmax" | "zscore" | None
 HORIZON = 5
 MODEL_TYPE = "mlp"  # "linear" | "mlp"
-EPOCHS = 5000
+EPOCHS = 2000
 LR = 1e-4
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+TRAIN_SLICE = 1.0  # 1.0 = full game | 0.5 = last 50% | 0.25 = last 25%
+TEST_SLICE = 0.5
 
 SCALER_PATH = f"D:/betastar/scaler_{SCALER_TYPE}.pkl"
 SAVE_PATH = f"D:/betastar/dataset_split_{SCALER_TYPE}.npz"
@@ -28,6 +30,22 @@ SAVE_PATH = f"D:/betastar/dataset_split_{SCALER_TYPE}.npz"
 
 
 # --- Data helpers ------------------------------------------------------------
+
+
+def input_sensitivity(model, X, device=DEVICE):
+    model.eval()
+    X_t = X.clone().to(device).requires_grad_(True)
+    out = model(X_t)
+    out.sum().backward()
+    # Average absolute gradient across all samples
+    return X_t.grad.abs().mean(dim=0).cpu()  # shape: [input_dim]
+
+
+def slice_frames(frames, slice_ratio):
+    if slice_ratio >= 1.0:
+        return frames
+    start = int(len(frames) * (1.0 - slice_ratio))
+    return frames[start:]
 
 
 def get_files_hash(files):
@@ -80,7 +98,8 @@ def collapse_action_window(window):
     return collapsed
 
 
-def build_replay_dataset(frames, horizon=HORIZON):
+def build_replay_dataset(frames, horizon=HORIZON, slice_ratio=1.0):
+    frames = slice_frames(frames, slice_ratio)
     T = len(frames)
     state_dim = len(flatten(frames[0]["state"]))
     action_dim = len(flatten(frames[0]["actions"]))
@@ -88,7 +107,7 @@ def build_replay_dataset(frames, horizon=HORIZON):
 
     for t in range(T - horizon + 1):
         state_vec = flatten(frames[t]["state"])
-        window = [frames[t + j]["actions"] for j in range(horizon)]
+        window = [frames[t + j]["actions"] for j in range(1, horizon + 1)]
         action_vec = flatten(collapse_action_window(window))
         assert len(state_vec) == state_dim
         assert len(action_vec) == action_dim
@@ -98,7 +117,7 @@ def build_replay_dataset(frames, horizon=HORIZON):
     return np.array(features, dtype=np.float32), np.array(targets, dtype=np.float32)
 
 
-def build_corpus_dataset(folder_path, horizon=HORIZON, files=None):
+def build_corpus_dataset(folder_path, horizon=HORIZON, files=None, slice_ratio=1.0):
     if files is None:
         files = [f for f in os.listdir(folder_path) if f.endswith(".json.gz")]
     print(f"Found {len(files)} replay files.")
@@ -119,7 +138,9 @@ def build_corpus_dataset(folder_path, horizon=HORIZON, files=None):
             print(f"Skipping {filename} (too short).")
             continue
 
-        X_np, y_np = build_replay_dataset(frames, horizon=horizon)
+        X_np, y_np = build_replay_dataset(
+            frames, horizon=horizon, slice_ratio=slice_ratio
+        )
         y_win_np = np.full((X_np.shape[0], 1), winner, dtype=np.float32)
 
         if global_state_dim is None:
@@ -145,14 +166,43 @@ def build_corpus_dataset(folder_path, horizon=HORIZON, files=None):
     return X_full, y_full, y_win_full
 
 
+def get_feature_names(sample_state):
+    """Walk the state dict and record what each flattened index corresponds to."""
+    names = []
+
+    def walk(obj, prefix=""):
+        if isinstance(obj, (int, float, bool)):
+            names.append(prefix)
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                walk(v, f"{prefix}[{i}]")
+        elif isinstance(obj, dict):
+            for k in sorted(obj.keys()):
+                walk(obj[k], f"{prefix}.{k}" if prefix else k)
+
+    walk(sample_state)
+    return names
+
+
 def build_dataset():
     all_files = [f for f in os.listdir(FOLDER) if f.endswith(".json.gz")]
     train_files, test_files = train_test_split(
         all_files, test_size=0.2, random_state=42
     )
 
-    X_train, y_train, y_win_train = build_corpus_dataset(FOLDER, files=train_files)
-    X_test, y_test, y_win_test = build_corpus_dataset(FOLDER, files=test_files)
+    X_train, y_train, y_win_train = build_corpus_dataset(
+        FOLDER, files=train_files, slice_ratio=TRAIN_SLICE
+    )
+    X_test, y_test, y_win_test = build_corpus_dataset(
+        FOLDER, files=test_files, slice_ratio=TEST_SLICE
+    )
+
+    # --- grab feature names from the first replay ---
+    with gzip.open(os.path.join(FOLDER, all_files[0]), "rt", encoding="utf-8") as f:
+        sample_replay = json.load(f)
+    feature_names = get_feature_names(sample_replay["frames"][0]["state"])
+    np.save("D:/betastar/feature_names.npy", feature_names)
+    # ------------------------------------------------
 
     if SCALER_TYPE == "minmax":
         scaler = MinMaxScaler()
@@ -169,6 +219,8 @@ def build_dataset():
     np.savez_compressed(
         SAVE_PATH,
         horizon=np.array(HORIZON),
+        train_slice=np.array(TRAIN_SLICE),
+        test_slice=np.array(TEST_SLICE),
         X_train=X_train,
         y_train=y_train,
         y_win_train=y_win_train,
@@ -192,6 +244,8 @@ def get_dataset():
             str(data["files_hash"]) == current_hash
         ), "File list changed, rebuilding..."
         assert int(data["horizon"]) == HORIZON, "Horizon mismatch"
+        assert float(data["train_slice"]) == TRAIN_SLICE, "Train slice mismatch"
+        assert float(data["test_slice"]) == TEST_SLICE, "Test slice mismatch"
 
         X_train = torch.from_numpy(data["X_train"])
         y_train = torch.from_numpy(data["y_train"])
@@ -199,14 +253,19 @@ def get_dataset():
         X_test = torch.from_numpy(data["X_test"])
         y_test = torch.from_numpy(data["y_test"])
         y_win_test = torch.from_numpy(data["y_win_test"])
+        feature_names = list(
+            np.load("D:/betastar/feature_names.npy", allow_pickle=True)
+        )
         print("Dataset loaded from cache.")
-
     except Exception as e:
         print(f"Rebuilding dataset ({e})...")
         X_train, y_train, y_win_train, X_test, y_test, y_win_test = build_dataset()
+        feature_names = list(
+            np.load("D:/betastar/feature_names.npy", allow_pickle=True)
+        )
 
     print(f"Train: {X_train.shape}  Test: {X_test.shape}")
-    return X_train, y_train, y_win_train, X_test, y_test, y_win_test
+    return X_train, y_train, y_win_train, X_test, y_test, y_win_test, feature_names
 
 
 # --- Models ------------------------------------------------------------------
@@ -225,9 +284,11 @@ class MLP(nn.Module):
     def __init__(self, input_dim, output_dim):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(input_dim, 256),
+            nn.Linear(input_dim, 1024),
             nn.ReLU(),
-            nn.Linear(256, 128),
+            nn.Linear(1024, 512),
+            nn.ReLU(),
+            nn.Linear(512, 128),
             nn.ReLU(),
             nn.Linear(128, output_dim),
         )
@@ -238,7 +299,7 @@ class MLP(nn.Module):
 
 # --- Main --------------------------------------------------------------------
 
-X_train, y_train, y_win_train, X_test, y_test, y_win_test = get_dataset()
+X_train, y_train, y_win_train, X_test, y_test, y_win_test, feature_names = get_dataset()
 
 win_rate = y_win_train.mean().item()
 pos_weight_val = (1 - win_rate) / win_rate
@@ -267,6 +328,9 @@ y_win_train_d = y_win_train.to(DEVICE)
 X_test_d = X_test.to(DEVICE)
 y_win_test_d = y_win_test.to(DEVICE)
 
+train_losses = []
+test_losses = []
+
 for epoch in range(EPOCHS):
     model.train()
     optimizer.zero_grad()
@@ -277,7 +341,10 @@ for epoch in range(EPOCHS):
     if epoch % 100 == 0:
         with torch.no_grad():
             test_loss = criterion(model(X_test_d), y_win_test_d)
+        train_losses.append(loss.item())
+        test_losses.append(test_loss.item())
         print(f"epoch {epoch:4d}  train={loss.item():.4f}  test={test_loss.item():.4f}")
+
 
 # --- Eval --------------------------------------------------------------------
 
@@ -311,3 +378,32 @@ with torch.no_grad():
             }
         )
     )
+
+torch.save(model.state_dict(), f"D:/betastar/model_{MODEL_TYPE}.pt")
+np.save("D:/betastar/feature_names.npy", feature_names)
+print("Model saved.")
+
+# -- Extra Stuff ----
+#
+# print(feature_names)
+# importance = input_sensitivity(model, X_test)
+# top_k = 1553
+# top_indices = importance.argsort(descending=True)[:top_k]
+# for rank, idx in enumerate(top_indices):
+#     print(f"#{rank+1:2d}  {feature_names[idx]:<40s}  sensitivity={importance[idx]:.4f}")
+
+# --- Loss curve --------------------------------------------------------------
+
+import matplotlib.pyplot as plt
+
+epochs_axis = list(range(0, EPOCHS, 100))
+plt.figure()
+plt.plot(epochs_axis, train_losses, label="train")
+plt.plot(epochs_axis, test_losses, label="test")
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.title(f"{MODEL_TYPE} | scaler={SCALER_TYPE}")
+plt.legend()
+plt.tight_layout()
+plt.savefig(f"loss_{MODEL_TYPE}_{SCALER_TYPE}.png")
+plt.show()

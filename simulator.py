@@ -349,8 +349,6 @@ class _ObservationAggregator(ObserverAI):
         self._structures_previous_map: Dict = {
             structure.tag: structure for structure in self.structures
         }
-        self.supply_army: int = state.common.food_army
-        self.supply_workers: int = state.common.food_workers
         self.minerals: int = state.common.minerals
         self.vespene: int = state.common.vespene
         self.supply_army: int = state.common.food_army

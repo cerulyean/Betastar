@@ -31,6 +31,13 @@ _NAME_FIXES = {
     "NYDUSCANAL": "NYDUSWORM",
 }
 
+EXCLUDE = {
+    "no_scout_noresponse.SC2Replay",
+    "scout_bad_response.SC2Replay",
+    "scout_no_response.SC2Replay",
+    "socut_less_bad_response.SC2Replay",
+}
+
 
 def _get_supply(unit_type_id: UnitTypeId) -> float:
     name = _NAME_FIXES.get(unit_type_id.name, unit_type_id.name)
@@ -38,11 +45,11 @@ def _get_supply(unit_type_id: UnitTypeId) -> float:
 
 
 INPUT_DIR = "output"
+# INPUT_DIR = "1000 extracts"
 OUTPUT_DIR = "prunes"
-#
-# with gzip.open('1000 extracts/26382813.SC2Replay_p1.json.gz', 'rt', encoding='utf-8') as f:
-#     data = json.load(f)
+# OUTPUT_DIR = "prune_test"
 DATA_SAVE_LOCATION = "D:/betastar/parser/data.json"
+# DATA_SAVE_LOCATION = "D:/betastar/parser/data_test.json"
 with open(DATA_SAVE_LOCATION, "r", encoding="utf-8") as f:
     MMR_DATA = json.load(f)
 
@@ -421,7 +428,6 @@ def stitch_and_prune_replay(replay_prefix: str) -> list:
     """
     replay_prefix example: "26382815.SC2Replay"
     """
-
     mmr = extract_mmr(replay_prefix)
 
     files = [
@@ -433,7 +439,10 @@ def stitch_and_prune_replay(replay_prefix: str) -> list:
     if not files:
         raise RuntimeError(f"No files found for {replay_prefix}")
 
-    files.sort(key=lambda x: int(x.split("_")[-1].split(".")[0]))
+    final_files = [f for f in files if f.split("_")[-1].split(".")[0] == "final"]
+    numbered_files = [f for f in files if f not in final_files]
+    numbered_files.sort(key=lambda x: int(x.split("_")[-1].split(".")[0]))
+    files = numbered_files + final_files
 
     print(f"Found {len(files)} chunks:")
     for f in files:
@@ -572,9 +581,14 @@ def main(folder: str = INPUT_DIR) -> None:
         if not filename.endswith(".json.gz"):
             continue
         game_id = filename.split("_", 1)[0]
+        if filename in EXCLUDE:
+            continue
         if game_id not in seen:
             seen.add(game_id)
-            process(game_id)
+            try:
+                process(game_id)
+            except Exception as e:
+                print(f"Failed {game_id}: {e}")
 
 
 if __name__ == "__main__":

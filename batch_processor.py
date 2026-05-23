@@ -4,6 +4,8 @@ import argparse, json, os, subprocess, time
 from datetime import datetime
 
 STEP_SIZE = 20
+CHECK_PROCESSED_COUNT = True
+data_location = r"D:\betastar\parser\data.json"
 
 
 def process_folder(
@@ -13,12 +15,13 @@ def process_folder(
     max_games=None,
 ):
     games_started = 0
-    with open("data.json") as f:
+    with open(data_location) as f:
         detailed_info = json.load(f)
 
     os.makedirs(output_folder, exist_ok=True)
     running = []
     t0 = time.time()
+    not_processed = 0
 
     for count, filename in enumerate(sorted(os.listdir(input_folder)), 1):
 
@@ -33,6 +36,10 @@ def process_folder(
         output_base = os.path.join(output_folder, game_id)
 
         if os.path.exists(output_base + "_1.json.gz"):
+            continue
+        print(f"NOT PROCESSED: {filename}")
+        if CHECK_PROCESSED_COUNT:
+            not_processed += 1
             continue
 
         running.append(
@@ -60,6 +67,7 @@ def process_folder(
 
     for p in running:
         p.wait()
+    print(str(not_processed) + " unprocessed")
 
 
 if __name__ == "__main__":

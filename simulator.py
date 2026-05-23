@@ -328,6 +328,26 @@ class _ObservationAggregator(ObserverAI):
             return 0
         return self._abilities_count_and_build_progress[0][ability]
 
+    async def on_end(self, game_result):
+        """Flush any remaining steps that never filled a full block of 10."""
+        if self.player_pov in (1, 2) and self.race != Race.Zerg:
+            return
+        if self.recent_steps:
+            compressed = compress_step_block(self.recent_steps)
+            self.final_data[self.block_index] = compressed
+            self.block_index += 1
+            self.recent_steps.clear()
+
+        if self.final_data:
+            save_number = (self.iteration // self.save_interval) + 1
+            save_name = self.save_name + "_" + str(save_number)
+            self.save_data(save_name)
+            print(
+                f"[on_end] Flushed {len(self.final_data)} block(s) to {save_name}.json.gz"
+            )
+        else:
+            print("[on_end] Nothing to flush.")
+
     def save_data(self, output_name):
         data = self.final_data
         print(f"[SAVE] Writing {len(data)} blocks to {output_name}.json.gz")
@@ -645,12 +665,22 @@ if __name__ == "__main__":
         step_size = int(sys.argv[4])
         extract_data(replay_path, output_path, fow_pov, step_size)
     else:
-        simulator = ReplaySimulator(
-            # "tests/replays/Alcyone LE (6).SC2Replay",
-            "1000 replays/26949276.SC2Replay",
-            # "1000 replays/10000 Feet LE (3).SC2Replay",
-            save_name="1000 extracts/26949276.SC2Replay",
-            fow_pov=1,
-            step_size=20,
-        )
-        simulator.run_simulation()
+
+        replays = [
+            "noscoutnoresponse.SC2Replay",
+            "scoutbadresponse.SC2Replay",
+            "scoutnoresponse.SC2Replay",
+            "scoutlessbadresponse.SC2Replay",
+        ]
+        for replay in replays:
+            path = "1000 replays/" + replay
+            save_name = "1000 extracts/" + replay
+            simulator = ReplaySimulator(
+                # "tests/replays/Alcyone LE (6).SC2Replay",
+                path,
+                # "1000 replays/10000 Feet LE (3).SC2Replay",
+                save_name=save_name,
+                fow_pov=1,
+                step_size=20,
+            )
+            simulator.run_simulation()

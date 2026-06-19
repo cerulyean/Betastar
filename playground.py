@@ -10,16 +10,17 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from collections import defaultdict
 import joblib
+import time
 
 # =============================================================================
 # CONFIG
 # =============================================================================
-FOLDER = r"D:\betastar\BetaStar\prunes_v5"
+FOLDER = r"D:\betastar\BetaStar\prunes_v7"
 SCALER_TYPE = None  # "minmax" | "zscore" | None
 HORIZON = 5
 MODEL_TYPE = "lstm"  # "linear" | "mlp" | "lstm"
 SEQ_LEN = 10
-EPOCHS = 500
+EPOCHS = 50
 LR = 1e-4
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 TRAIN_SLICE = 1.0  # 1.0 = full game | 0.5 = last 50% | 0.25 = last 25%
@@ -417,7 +418,7 @@ def train_and_eval(plot=False):
             train_losses.append(loss.item())
             test_losses.append(test_loss.item())
             print(
-                f"epoch {epoch:4d}  train={loss.item():.4f}  test={test_loss.item():.4f}"
+                f"epoch {epoch:4d}  train={loss.item():.4f}  test={test_loss.item():.4f} t={time.time():.0f}"
             )
 
     with torch.no_grad():

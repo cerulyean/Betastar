@@ -22,7 +22,7 @@ import extract_pruner as ep
 
 RAW_CACHE_DIR = r"D:\betastar\benchmark_cache\raw"
 PRUNED_DIR = r"D:\betastar\benchmark_cache\pruned"
-DUMMY_MMR = 3500
+DUMMY_MMR = 4200
 
 # ---------------------------------------------------------------------------
 

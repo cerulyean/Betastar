@@ -639,7 +639,7 @@ class CustomEncoder(json.JSONEncoder):
 # e.g. replay_name = "tests/replays/Alcyone LE (6).SC2Replay"
 # e.g. output_name = "output.json.gz"
 # 224 step size is 10s
-def extract_data(replay_name: str, output_name: str, fow_pov, step_size: int = 11):
+def extract_data(replay_name: str, output_name: str, fow_pov, step_size: int = 20):
     simulator = ReplaySimulator(
         replay_name, output_name, fow_pov=fow_pov, step_size=step_size
     )

@@ -38,23 +38,39 @@ sys.path.insert(0, os.path.dirname(__file__))
 from playground import (
     MLP,
     LinearModel,
+    LSTMModel,
     DEVICE,
     SCALER_TYPE,
     SCALER_PATH,
+    SEQ_LEN,
     build_inference_dataset,
 )
 
+"""
+class_1_10000_feet_le_515261123
+class_1_old_republic_le_6226957
+class_1_white_rabbit_le_6226946
+class_2_10000_feet_le_515261112
+class_2_old_republic_le_6226959
+class_2_white_rabbit_le_6226949
+class_4_10000_feet_le_62261010
+class_5_10000_feet_le_62261007
+class_6_10000_feet_le_62261034
+class_7_10000_feet_le_62261109
+class_8_10000_feet_le_6926709
+class_9_10000_feet_le_6926723
+"""
 REPLAY_PATH = (
-    "D:/betastar/benchmark_cache/pruned/class_2_10000_feet_le_515261112.json.gz"
+    "D:/betastar/benchmark_cache/pruned/class_7_10000_feet_le_62261109.json.gz"
 )
-MODEL_TYPE = "mlp"
+MODEL_TYPE = "lstm"  # "mlp" | "linear" | "lstm"
 MODEL_PATH = f"D:/betastar/model_{MODEL_TYPE}.pt"
 
 # SC2 timing constants
 # step_size gameloops happen between each on_step call (set in simulator.py batch args)
 # 22.4 gameloops = 1 real-time second on "Faster" speed (standard ladder speed)
 # Each stored *block* compresses 10 raw steps, so iteration in the JSON is the
-# raw on_step counter.  game_seconds = iteration * step_size / 22.4
+# raw on_step counter.  game_seconds = block_index * 10 * step_size / 22.4
 STEP_SIZE = 20  # must match what was used when extracting this replay
 GAMELOOPS_PER_SEC = 22.4
 
@@ -80,15 +96,32 @@ def run_inference(frames):
 
     if SCALER_TYPE is not None:
         scaler = joblib.load(SCALER_PATH)
-        X_np = scaler.transform(X_np)
+        if MODEL_TYPE == "lstm":
+            # X_np is 2D here (T, features); scale then re-window below
+            X_np = scaler.transform(X_np)
+        else:
+            X_np = scaler.transform(X_np)
 
-    X = torch.from_numpy(X_np).to(DEVICE)
-    input_dim = X.shape[1]
-
-    if MODEL_TYPE == "mlp":
-        model = MLP(input_dim, output_dim=1)
+    if MODEL_TYPE == "lstm":
+        # Build sliding-window sequences: shape (T - SEQ_LEN, SEQ_LEN, features)
+        T, F = X_np.shape
+        if T < SEQ_LEN:
+            raise ValueError(
+                f"Replay has only {T} frames, need at least SEQ_LEN={SEQ_LEN}"
+            )
+        sequences = np.stack(
+            [X_np[t : t + SEQ_LEN] for t in range(T - SEQ_LEN)], axis=0
+        ).astype(np.float32)
+        X = torch.from_numpy(sequences).to(DEVICE)
+        input_dim = F
+        model = LSTMModel(input_dim, hidden_dim=256, num_layers=2, output_dim=1)
     else:
-        model = LinearModel(input_dim, output_dim=1)
+        X = torch.from_numpy(X_np).to(DEVICE)
+        input_dim = X_np.shape[1]
+        if MODEL_TYPE == "mlp":
+            model = MLP(input_dim, output_dim=1)
+        else:
+            model = LinearModel(input_dim, output_dim=1)
 
     model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
     model.to(DEVICE)
@@ -96,6 +129,12 @@ def run_inference(frames):
 
     with torch.no_grad():
         probs = torch.sigmoid(model(X)).cpu().numpy().flatten()
+
+    # For LSTM the first SEQ_LEN-1 frames have no prediction.
+    # Pad the front with NaN so indices stay aligned with the original frame list.
+    if MODEL_TYPE == "lstm":
+        pad = np.full(SEQ_LEN, np.nan)
+        probs = np.concatenate([pad, probs])
 
     return X_np, probs
 
@@ -146,7 +185,7 @@ class BenchmarkViz:
             sorted_keys = sorted(self.frames.keys(), key=lambda k: int(k))
             self.frames = [self.frames[k] for k in sorted_keys]
 
-        print(f"Running inference on {len(self.frames)} frames...")
+        print(f"Running inference on {len(self.frames)} frames (model={MODEL_TYPE})...")
         self.X_np, self.probs = run_inference(self.frames)
 
         self.frame_indices = np.arange(len(self.frames))
@@ -241,6 +280,17 @@ class BenchmarkViz:
         self.ax.plot(x, self.probs, color="#2196F3", linewidth=1.5, label="Win prob")
         self.ax.axhline(0.5, color="#aaaaaa", linestyle="--", linewidth=0.8)
 
+        # Shade the LSTM warm-up region where predictions are unavailable
+        if MODEL_TYPE == "lstm" and SEQ_LEN > 1:
+            warmup_x = x[SEQ_LEN - 1] if len(x) >= SEQ_LEN else x[-1]
+            self.ax.axvspan(
+                x[0],
+                warmup_x,
+                alpha=0.08,
+                color="gray",
+                label=f"LSTM warm-up ({SEQ_LEN - 1} frames)",
+            )
+
         if self.winner is not None:
             color = "#4CAF50" if self.winner == 1 else "#F44336"
             label = "Zerg wins" if self.winner == 1 else "Zerg loses"
@@ -268,7 +318,7 @@ class BenchmarkViz:
                 fontsize=7,
                 color="#E65100",
                 transform=self.ax.get_xaxis_transform(),
-                clip_on=False,  # allow labels to render above axes boundary
+                clip_on=False,
             )
 
         self.ax.set_ylim(-0.05, 1.15)
@@ -284,7 +334,8 @@ class BenchmarkViz:
             self.ax.set_xlabel("Stored frame index")
             self.ax.xaxis.set_major_formatter(ticker.ScalarFormatter())
 
-        self.ax.set_title(os.path.basename(self.replay_path), fontsize=10)
+        title = os.path.basename(self.replay_path)
+        self.ax.set_title(f"{title}  [{MODEL_TYPE.upper()}]", fontsize=10)
         self.ax.grid(True, alpha=0.25)
         self.fig.canvas.draw_idle()
 
@@ -293,7 +344,6 @@ class BenchmarkViz:
     # ------------------------------------------------------------------
 
     def _on_label_submit(self, text):
-        """Called when user presses Enter in the label box."""
         self.current_label = text.strip() or "event"
         print(f"  label set to '{self.current_label}'")
 

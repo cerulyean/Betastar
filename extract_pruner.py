@@ -122,35 +122,30 @@ def extract_mmr(game_id: str) -> int:
     Returns:
         int: The MMR value associated with the game.
     """
-    return MMR_DATA[game_id]["mmr"]
+    entry = MMR_DATA[game_id]
+    if entry.get("skipped"):
+        raise ValueError(f"{game_id} is marked as skipped")
+    return entry["mmr"]
 
 
 def extract_win_flag(game_id: str) -> int:
     """
-    Determines whether the Zerg player won the game.
+    Determines whether the Zerg player won the game, using Blizzard toon_ids.
 
-    Args:
-        game_id (str): The replay filename prefix (e.g. "26382813.SC2Replay").
-
-    Returns:
-        int: 1 if Zerg won, 0 otherwise.
-
-    Raises:
-        ValueError: If no Zerg player is found in the game data.
+    Returns 1 if Zerg won, 0 otherwise.
     """
     game = MMR_DATA[game_id]
-    winner_id = game["winner_id"]
+    winner_toon = game["winner_toon_id"]
     players = game["players"]
 
-    # Find which player is Zerg
     for p in players.values():
         if p["race"].lower() == "zerg":
-            zerg_id = p["id"]
+            zerg_toon = p["toon_id"]
             break
     else:
         raise ValueError(f"No Zerg player found in game {game_id}")
 
-    return 1 if winner_id == zerg_id else 0
+    return 1 if winner_toon == zerg_toon else 0
 
 
 def prune_unit_data(original_unit: dict, current_state_iteration: int) -> dict:
@@ -581,6 +576,9 @@ def main(folder: str = INPUT_DIR) -> None:
         if not filename.endswith(".json.gz"):
             continue
         game_id = filename.split("_", 1)[0]
+        game_data = MMR_DATA.get(game_id.replace(".json.gz", "").split("_")[0])
+        if game_data is None or game_data.get("skipped"):
+            continue
         if filename in EXCLUDE:
             continue
         if game_id not in seen:
